@@ -11,6 +11,7 @@ import (
 	"internal/race"
 	"internal/testenv"
 	. "runtime"
+	"sort"
 	"sync/atomic"
 	"testing"
 	"unsafe"
@@ -707,7 +708,7 @@ func BenchmarkClearFat1040(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat7(b *testing.B) {
+func CopyFat7(b *testing.B) {
 	var x [7]byte
 	p := new([7]byte)
 	Escape(p)
@@ -717,7 +718,7 @@ func BenchmarkCopyFat7(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat8(b *testing.B) {
+func CopyFat8(b *testing.B) {
 	var x [8 / 4]uint32
 	p := new([8 / 4]uint32)
 	Escape(p)
@@ -727,7 +728,7 @@ func BenchmarkCopyFat8(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat11(b *testing.B) {
+func CopyFat11(b *testing.B) {
 	var x [11]byte
 	p := new([11]byte)
 	Escape(p)
@@ -737,7 +738,7 @@ func BenchmarkCopyFat11(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat12(b *testing.B) {
+func CopyFat12(b *testing.B) {
 	var x [12 / 4]uint32
 	p := new([12 / 4]uint32)
 	Escape(p)
@@ -747,7 +748,7 @@ func BenchmarkCopyFat12(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat13(b *testing.B) {
+func CopyFat13(b *testing.B) {
 	var x [13]byte
 	p := new([13]byte)
 	Escape(p)
@@ -757,7 +758,7 @@ func BenchmarkCopyFat13(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat14(b *testing.B) {
+func CopyFat14(b *testing.B) {
 	var x [14]byte
 	p := new([14]byte)
 	Escape(p)
@@ -767,7 +768,7 @@ func BenchmarkCopyFat14(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat15(b *testing.B) {
+func CopyFat15(b *testing.B) {
 	var x [15]byte
 	p := new([15]byte)
 	Escape(p)
@@ -777,7 +778,7 @@ func BenchmarkCopyFat15(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat16(b *testing.B) {
+func CopyFat16(b *testing.B) {
 	var x [16 / 4]uint32
 	p := new([16 / 4]uint32)
 	Escape(p)
@@ -787,7 +788,7 @@ func BenchmarkCopyFat16(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat24(b *testing.B) {
+func CopyFat24(b *testing.B) {
 	var x [24 / 4]uint32
 	p := new([24 / 4]uint32)
 	Escape(p)
@@ -797,7 +798,7 @@ func BenchmarkCopyFat24(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat32(b *testing.B) {
+func CopyFat32(b *testing.B) {
 	var x [32 / 4]uint32
 	p := new([32 / 4]uint32)
 	Escape(p)
@@ -807,7 +808,7 @@ func BenchmarkCopyFat32(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat64(b *testing.B) {
+func CopyFat64(b *testing.B) {
 	var x [64 / 4]uint32
 	p := new([64 / 4]uint32)
 	Escape(p)
@@ -817,7 +818,7 @@ func BenchmarkCopyFat64(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat72(b *testing.B) {
+func CopyFat72(b *testing.B) {
 	var x [72 / 4]uint32
 	p := new([72 / 4]uint32)
 	Escape(p)
@@ -827,7 +828,7 @@ func BenchmarkCopyFat72(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat128(b *testing.B) {
+func CopyFat128(b *testing.B) {
 	var x [128 / 4]uint32
 	p := new([128 / 4]uint32)
 	Escape(p)
@@ -837,7 +838,7 @@ func BenchmarkCopyFat128(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat256(b *testing.B) {
+func CopyFat256(b *testing.B) {
 	var x [256 / 4]uint32
 	p := new([256 / 4]uint32)
 	Escape(p)
@@ -847,7 +848,7 @@ func BenchmarkCopyFat256(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat512(b *testing.B) {
+func CopyFat512(b *testing.B) {
 	var x [512 / 4]uint32
 	p := new([512 / 4]uint32)
 	Escape(p)
@@ -857,7 +858,7 @@ func BenchmarkCopyFat512(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat520(b *testing.B) {
+func CopyFat520(b *testing.B) {
 	var x [520 / 4]uint32
 	p := new([520 / 4]uint32)
 	Escape(p)
@@ -867,7 +868,7 @@ func BenchmarkCopyFat520(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat1024(b *testing.B) {
+func CopyFat1024(b *testing.B) {
 	var x [1024 / 4]uint32
 	p := new([1024 / 4]uint32)
 	Escape(p)
@@ -877,7 +878,7 @@ func BenchmarkCopyFat1024(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat1032(b *testing.B) {
+func CopyFat1032(b *testing.B) {
 	var x [1032 / 4]uint32
 	p := new([1032 / 4]uint32)
 	Escape(p)
@@ -887,7 +888,7 @@ func BenchmarkCopyFat1032(b *testing.B) {
 	}
 }
 
-func BenchmarkCopyFat1040(b *testing.B) {
+func CopyFat1040(b *testing.B) {
 	var x [1040 / 4]uint32
 	p := new([1040 / 4]uint32)
 	Escape(p)
@@ -895,6 +896,74 @@ func BenchmarkCopyFat1040(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		*p = x
 	}
+}
+
+func CopyFat2040(b *testing.B) {
+	var x [2048 / 4]uint32
+	p := new([2048 / 4]uint32)
+	Escape(p)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		*p = x
+	}
+}
+
+func CopyFat2048(b *testing.B) {
+	var x [2048 / 4]uint32
+	p := new([2048 / 4]uint32)
+	Escape(p)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		*p = x
+	}
+}
+
+func CopyFat2056(b *testing.B) {
+	var x [2056 / 4]uint32
+	p := new([2056 / 4]uint32)
+	Escape(p)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		*p = x
+	}
+}
+
+func BenchmarkCopyFat(b *testing.B) {
+	funcMap := map[int]func(b *testing.B){
+		7:    CopyFat7,
+		8:    CopyFat8,
+		11:   CopyFat11,
+		12:   CopyFat12,
+		13:   CopyFat13,
+		14:   CopyFat14,
+		15:   CopyFat15,
+		16:   CopyFat16,
+		24:   CopyFat24,
+		32:   CopyFat32,
+		64:   CopyFat64,
+		72:   CopyFat72,
+		128:  CopyFat128,
+		256:  CopyFat256,
+		512:  CopyFat512,
+		520:  CopyFat520,
+		1024: CopyFat1024,
+		1032: CopyFat1032,
+		1040: CopyFat1040,
+		2040: CopyFat2040,
+		2048: CopyFat2048,
+		2056: CopyFat2056,
+	}
+	sizes := make([]int, 0, len(funcMap))
+	for k := range funcMap {
+		sizes = append(sizes, k)
+	}
+	sort.Ints(sizes)
+
+	benchmarkSizes(b, sizes, func(b *testing.B, n int) {
+		if fn, err := funcMap[n]; err {
+			fn(b)
+		}
+	})
 }
 
 // BenchmarkIssue18740 ensures that memmove uses 4 and 8 byte load/store to move 4 and 8 bytes.
