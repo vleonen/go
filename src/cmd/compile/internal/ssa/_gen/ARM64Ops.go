@@ -588,8 +588,8 @@ func init() {
 		// arg2 = address of the last element of src
 		// arg3 = mem
 		// returns mem
-		//	LDP.P	16(R16), (R25, Rtmp)
-		//	STP.P	(R25, Rtmp), 16(R17)
+		//	FLDPQ.P	32(R16), (F16, F17)
+		//	FSTPQ.P	(F16, F17), 32(R17)
 		//	CMP	Rarg2, R16
 		//	BLE	-3(PC)
 		// Note: the-end-of-src may be not a valid pointer. it's a problem if it is spilled.
@@ -599,7 +599,7 @@ func init() {
 			argLength: 4,
 			reg: regInfo{
 				inputs:   []regMask{buildReg("R17"), buildReg("R16"), gp &^ buildReg("R25")},
-				clobbers: buildReg("R16 R17 R25"),
+				clobbers: buildReg("R16 R17 R25 F16 F17"),
 			},
 			clobberFlags:   true,
 			faultOnNilArg0: true,

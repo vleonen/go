@@ -1033,27 +1033,27 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To.Sym = ir.Syms.Duffcopy
 		p.To.Offset = v.AuxInt
 	case ssa.OpARM64LoweredMove:
-		// LDP.P	16(R16), (R25, Rtmp)
-		// STP.P	(R25, Rtmp), 16(R17)
+		// FLDPQ.P	32(R16), (F16, F17)
+		// FSTPQ.P	(F16, F17), 32(R17)
 		// CMP	Rarg2, R16
 		// BLE	-3(PC)
 		// arg2 is the address of the last element of src
-		p := s.Prog(arm64.ALDP)
+		p := s.Prog(arm64.AFLDPQ)
 		p.Scond = arm64.C_XPOST
 		p.From.Type = obj.TYPE_MEM
 		p.From.Reg = arm64.REG_R16
-		p.From.Offset = 16
+		p.From.Offset = 32
 		p.To.Type = obj.TYPE_REGREG
-		p.To.Reg = arm64.REG_R25
-		p.To.Offset = int64(arm64.REGTMP)
-		p2 := s.Prog(arm64.ASTP)
+		p.To.Reg = arm64.REG_F16
+		p.To.Offset = int64(arm64.REG_F17)
+		p2 := s.Prog(arm64.AFSTPQ)
 		p2.Scond = arm64.C_XPOST
 		p2.From.Type = obj.TYPE_REGREG
-		p2.From.Reg = arm64.REG_R25
-		p2.From.Offset = int64(arm64.REGTMP)
+		p2.From.Reg = arm64.REG_F16
+		p2.From.Offset = int64(arm64.REG_F17)
 		p2.To.Type = obj.TYPE_MEM
 		p2.To.Reg = arm64.REG_R17
-		p2.To.Offset = 16
+		p2.To.Offset = 32
 		p3 := s.Prog(arm64.ACMP)
 		p3.From.Type = obj.TYPE_REG
 		p3.From.Reg = v.Args[2].Reg()

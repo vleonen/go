@@ -502,16 +502,26 @@
 (MOVDstorezero {s} [i] ptr x:(MOVDstorezero {s} [i-8] ptr mem)) && x.Uses == 1 && setPos(v, x.Pos) && clobber(x) => (MOVQstorezero {s} [i-8] ptr mem)
 
 // strip off fractional word move
-(Move [s] dst src mem) && s%16 != 0 && s%16 <= 8 && s > 64 =>
+(Move [s] dst src mem) && s%32 != 0 && s%32 <= 8 && s > 64 =>
 	(Move [8]
 		(OffPtr <dst.Type> dst [s-8])
 		(OffPtr <src.Type> src [s-8])
-		(Move [s-s%16] dst src mem))
-(Move [s] dst src mem) && s%16 != 0 && s%16 > 8 && s > 64 =>
+		(Move [s-s%32] dst src mem))
+(Move [s] dst src mem) && s%32 != 0 && s%32 > 8 && s%32 <= 16 && s > 64 =>
 	(Move [16]
 		(OffPtr <dst.Type> dst [s-16])
 		(OffPtr <src.Type> src [s-16])
-		(Move [s-s%16] dst src mem))
+		(Move [s-s%32] dst src mem))
+(Move [s] dst src mem) && s%32 != 0 && s%32 > 16 && s%32 <= 24 && s > 64 =>
+	(Move [24]
+		(OffPtr <dst.Type> dst [s-24])
+		(OffPtr <src.Type> src [s-24])
+		(Move [s-s%32] dst src mem))
+(Move [s] dst src mem) && s%32 != 0 && s%32 > 24 && s > 64 =>
+	(Move [32]
+		(OffPtr <dst.Type> dst [s-32])
+		(OffPtr <src.Type> src [s-32])
+		(Move [s-s%32] dst src mem))
 
 // medium move uses a duff device
 (Move [s] dst src mem)
@@ -527,12 +537,12 @@
 
 // large move uses a loop
 (Move [s] dst src mem)
-	&& s%16 == 0 && (s > 16*64 || config.noDuffDevice)
+	&& s%32 == 0 && (s > 16*64 || config.noDuffDevice)
 	&& logLargeCopy(v, s) =>
 	(LoweredMove
 		dst
 		src
-		(ADDconst <src.Type> src [s-16])
+		(ADDconst <src.Type> src [s-32])
 		mem)
 
 // calls
