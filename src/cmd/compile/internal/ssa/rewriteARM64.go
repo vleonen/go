@@ -19541,14 +19541,14 @@ func rewriteValueARM64_OpMove(v *Value) bool {
 		return true
 	}
 	// match: (Move [s] dst src mem)
-	// cond: s%16 != 0 && s%16 <= 8 && s > 64
-	// result: (Move [8] (OffPtr <dst.Type> dst [s-8]) (OffPtr <src.Type> src [s-8]) (Move [s-s%16] dst src mem))
+	// cond: s%32 != 0 && s%32 <= 8 && s > 64
+	// result: (Move [8] (OffPtr <dst.Type> dst [s-8]) (OffPtr <src.Type> src [s-8]) (Move [s-s%32] dst src mem))
 	for {
 		s := auxIntToInt64(v.AuxInt)
 		dst := v_0
 		src := v_1
 		mem := v_2
-		if !(s%16 != 0 && s%16 <= 8 && s > 64) {
+		if !(s%32 != 0 && s%32 <= 8 && s > 64) {
 			break
 		}
 		v.reset(OpMove)
@@ -19560,20 +19560,20 @@ func rewriteValueARM64_OpMove(v *Value) bool {
 		v1.AuxInt = int64ToAuxInt(s - 8)
 		v1.AddArg(src)
 		v2 := b.NewValue0(v.Pos, OpMove, types.TypeMem)
-		v2.AuxInt = int64ToAuxInt(s - s%16)
+		v2.AuxInt = int64ToAuxInt(s - s%32)
 		v2.AddArg3(dst, src, mem)
 		v.AddArg3(v0, v1, v2)
 		return true
 	}
 	// match: (Move [s] dst src mem)
-	// cond: s%16 != 0 && s%16 > 8 && s > 64
-	// result: (Move [16] (OffPtr <dst.Type> dst [s-16]) (OffPtr <src.Type> src [s-16]) (Move [s-s%16] dst src mem))
+	// cond: s%32 != 0 && s%32 > 8 && s%32 <= 16 && s > 64
+	// result: (Move [16] (OffPtr <dst.Type> dst [s-16]) (OffPtr <src.Type> src [s-16]) (Move [s-s%32] dst src mem))
 	for {
 		s := auxIntToInt64(v.AuxInt)
 		dst := v_0
 		src := v_1
 		mem := v_2
-		if !(s%16 != 0 && s%16 > 8 && s > 64) {
+		if !(s%32 != 0 && s%32 > 8 && s%32 <= 16 && s > 64) {
 			break
 		}
 		v.reset(OpMove)
@@ -19585,7 +19585,57 @@ func rewriteValueARM64_OpMove(v *Value) bool {
 		v1.AuxInt = int64ToAuxInt(s - 16)
 		v1.AddArg(src)
 		v2 := b.NewValue0(v.Pos, OpMove, types.TypeMem)
-		v2.AuxInt = int64ToAuxInt(s - s%16)
+		v2.AuxInt = int64ToAuxInt(s - s%32)
+		v2.AddArg3(dst, src, mem)
+		v.AddArg3(v0, v1, v2)
+		return true
+	}
+	// match: (Move [s] dst src mem)
+	// cond: s%32 != 0 && s%32 > 16 && s%32 <= 24 && s > 64
+	// result: (Move [24] (OffPtr <dst.Type> dst [s-24]) (OffPtr <src.Type> src [s-24]) (Move [s-s%32] dst src mem))
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		dst := v_0
+		src := v_1
+		mem := v_2
+		if !(s%32 != 0 && s%32 > 16 && s%32 <= 24 && s > 64) {
+			break
+		}
+		v.reset(OpMove)
+		v.AuxInt = int64ToAuxInt(24)
+		v0 := b.NewValue0(v.Pos, OpOffPtr, dst.Type)
+		v0.AuxInt = int64ToAuxInt(s - 24)
+		v0.AddArg(dst)
+		v1 := b.NewValue0(v.Pos, OpOffPtr, src.Type)
+		v1.AuxInt = int64ToAuxInt(s - 24)
+		v1.AddArg(src)
+		v2 := b.NewValue0(v.Pos, OpMove, types.TypeMem)
+		v2.AuxInt = int64ToAuxInt(s - s%32)
+		v2.AddArg3(dst, src, mem)
+		v.AddArg3(v0, v1, v2)
+		return true
+	}
+	// match: (Move [s] dst src mem)
+	// cond: s%32 != 0 && s%32 > 24 && s > 64
+	// result: (Move [32] (OffPtr <dst.Type> dst [s-32]) (OffPtr <src.Type> src [s-32]) (Move [s-s%32] dst src mem))
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		dst := v_0
+		src := v_1
+		mem := v_2
+		if !(s%32 != 0 && s%32 > 24 && s > 64) {
+			break
+		}
+		v.reset(OpMove)
+		v.AuxInt = int64ToAuxInt(32)
+		v0 := b.NewValue0(v.Pos, OpOffPtr, dst.Type)
+		v0.AuxInt = int64ToAuxInt(s - 32)
+		v0.AddArg(dst)
+		v1 := b.NewValue0(v.Pos, OpOffPtr, src.Type)
+		v1.AuxInt = int64ToAuxInt(s - 32)
+		v1.AddArg(src)
+		v2 := b.NewValue0(v.Pos, OpMove, types.TypeMem)
+		v2.AuxInt = int64ToAuxInt(s - s%32)
 		v2.AddArg3(dst, src, mem)
 		v.AddArg3(v0, v1, v2)
 		return true
@@ -19607,19 +19657,19 @@ func rewriteValueARM64_OpMove(v *Value) bool {
 		return true
 	}
 	// match: (Move [s] dst src mem)
-	// cond: s%16 == 0 && s > 16*64 && logLargeCopy(v, s)
-	// result: (LoweredMove dst src (ADDconst <src.Type> src [s-16]) mem)
+	// cond: s%32 == 0 && s > 16*64 && logLargeCopy(v, s)
+	// result: (LoweredMove dst src (ADDconst <src.Type> src [s-32]) mem)
 	for {
 		s := auxIntToInt64(v.AuxInt)
 		dst := v_0
 		src := v_1
 		mem := v_2
-		if !(s%16 == 0 && s > 16*64 && logLargeCopy(v, s)) {
+		if !(s%32 == 0 && s > 16*64 && logLargeCopy(v, s)) {
 			break
 		}
 		v.reset(OpARM64LoweredMove)
 		v0 := b.NewValue0(v.Pos, OpARM64ADDconst, src.Type)
-		v0.AuxInt = int64ToAuxInt(s - 16)
+		v0.AuxInt = int64ToAuxInt(s - 32)
 		v0.AddArg(src)
 		v.AddArg4(dst, src, v0, mem)
 		return true
