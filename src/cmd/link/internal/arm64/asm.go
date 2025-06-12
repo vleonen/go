@@ -1254,7 +1254,7 @@ func gensymlate(ctxt *ld.Link, ldr *loader.Loader) {
 
 	// Generate symbol names for every offset we need in duffcopy/duffzero (only 64 each).
 	if s := ldr.Lookup("runtime.duffcopy", sym.SymVerABIInternal); s != 0 && ldr.AttrReachable(s) {
-		addLabelSyms(s, 8, 8*64)
+		addLabelSyms(s, 8, 8*32)
 	}
 	if s := ldr.Lookup("runtime.duffzero", sym.SymVerABIInternal); s != 0 && ldr.AttrReachable(s) {
 		addLabelSyms(s, 4, 4*64)

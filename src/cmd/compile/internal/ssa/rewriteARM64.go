@@ -19641,18 +19641,18 @@ func rewriteValueARM64_OpMove(v *Value) bool {
 		return true
 	}
 	// match: (Move [s] dst src mem)
-	// cond: s > 64 && s <= 16*64 && s%16 == 0 && logLargeCopy(v, s)
-	// result: (DUFFCOPY [8 * (64 - s/16)] dst src mem)
+	// cond: s > 64 && s <= 16*64 && s%32 == 0 && logLargeCopy(v, s)
+	// result: (DUFFCOPY [8 * (32 - s/32)] dst src mem)
 	for {
 		s := auxIntToInt64(v.AuxInt)
 		dst := v_0
 		src := v_1
 		mem := v_2
-		if !(s > 64 && s <= 16*64 && s%16 == 0 && logLargeCopy(v, s)) {
+		if !(s > 64 && s <= 16*64 && s%32 == 0 && logLargeCopy(v, s)) {
 			break
 		}
 		v.reset(OpARM64DUFFCOPY)
-		v.AuxInt = int64ToAuxInt(8 * (64 - s/16))
+		v.AuxInt = int64ToAuxInt(8 * (32 - s/32))
 		v.AddArg3(dst, src, mem)
 		return true
 	}

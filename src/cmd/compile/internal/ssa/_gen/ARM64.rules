@@ -522,15 +522,15 @@
 
 // medium move uses a duff device
 (Move [s] dst src mem)
-	&& s > 64 && s <= 16*64 && s%16 == 0
+	&& s > 64 && s <= 16*64 && s%32 == 0
 	&& logLargeCopy(v, s) =>
-	(DUFFCOPY [8 * (64 - s/16)] dst src mem)
+	(DUFFCOPY [8 * (32 - s/32)] dst src mem)
 // 8 is the number of bytes to encode:
 //
-// LDP.P   16(R16), (R26, R27)
-// STP.P   (R26, R27), 16(R17)
+// FLDPQ.P   32(R20), (F16, F17)
+// FSTPQ.P   (F16, F17), 32(R21)
 //
-// 64 is number of these blocks. See runtime/duff_arm64.s:duffcopy
+// 32 is number of these blocks. See runtime/duff_arm64.s:duffcopy
 
 // large move uses a loop
 (Move [s] dst src mem)

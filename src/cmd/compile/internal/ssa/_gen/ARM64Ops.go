@@ -585,6 +585,8 @@ func init() {
 		// arg2 = mem
 		// auxint = offset into duffcopy code to start executing
 		// returns mem
+		//  FLDPQ.P	32(R20), (F16, F17)
+		//  FSTPQ.P	(F16, F17), 32(R21)
 		// R20, R21 changed as side effect
 		// R16 and R17 may be clobbered by linker trampoline.
 		{
@@ -593,7 +595,7 @@ func init() {
 			argLength: 3,
 			reg: regInfo{
 				inputs:   []regMask{buildReg("R21"), buildReg("R20")},
-				clobbers: buildReg("R16 R17 R20 R21 R26 R30"),
+				clobbers: buildReg("R20 R21 R30 F16 F17"),
 			},
 			//faultOnNilArg0: true, // Note: removed for 73748. TODO: reenable at some point
 			//faultOnNilArg1: true,
