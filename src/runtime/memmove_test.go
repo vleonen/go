@@ -519,7 +519,7 @@ func BenchmarkMemclrRange(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat7(b *testing.B) {
+func ClearFat7(b *testing.B) {
 	p := new([7]byte)
 	Escape(p)
 	b.ResetTimer()
@@ -528,7 +528,7 @@ func BenchmarkClearFat7(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat8(b *testing.B) {
+func ClearFat8(b *testing.B) {
 	p := new([8 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -537,7 +537,7 @@ func BenchmarkClearFat8(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat11(b *testing.B) {
+func ClearFat11(b *testing.B) {
 	p := new([11]byte)
 	Escape(p)
 	b.ResetTimer()
@@ -546,7 +546,7 @@ func BenchmarkClearFat11(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat12(b *testing.B) {
+func ClearFat12(b *testing.B) {
 	p := new([12 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -555,7 +555,7 @@ func BenchmarkClearFat12(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat13(b *testing.B) {
+func ClearFat13(b *testing.B) {
 	p := new([13]byte)
 	Escape(p)
 	b.ResetTimer()
@@ -564,7 +564,7 @@ func BenchmarkClearFat13(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat14(b *testing.B) {
+func ClearFat14(b *testing.B) {
 	p := new([14]byte)
 	Escape(p)
 	b.ResetTimer()
@@ -573,7 +573,7 @@ func BenchmarkClearFat14(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat15(b *testing.B) {
+func ClearFat15(b *testing.B) {
 	p := new([15]byte)
 	Escape(p)
 	b.ResetTimer()
@@ -582,7 +582,7 @@ func BenchmarkClearFat15(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat16(b *testing.B) {
+func ClearFat16(b *testing.B) {
 	p := new([16 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -591,7 +591,7 @@ func BenchmarkClearFat16(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat24(b *testing.B) {
+func ClearFat24(b *testing.B) {
 	p := new([24 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -600,7 +600,7 @@ func BenchmarkClearFat24(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat32(b *testing.B) {
+func ClearFat32(b *testing.B) {
 	p := new([32 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -609,7 +609,7 @@ func BenchmarkClearFat32(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat40(b *testing.B) {
+func ClearFat40(b *testing.B) {
 	p := new([40 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -618,7 +618,7 @@ func BenchmarkClearFat40(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat48(b *testing.B) {
+func ClearFat48(b *testing.B) {
 	p := new([48 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -627,7 +627,7 @@ func BenchmarkClearFat48(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat56(b *testing.B) {
+func ClearFat56(b *testing.B) {
 	p := new([56 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -636,7 +636,7 @@ func BenchmarkClearFat56(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat64(b *testing.B) {
+func ClearFat64(b *testing.B) {
 	p := new([64 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -645,7 +645,7 @@ func BenchmarkClearFat64(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat72(b *testing.B) {
+func ClearFat72(b *testing.B) {
 	p := new([72 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -654,7 +654,7 @@ func BenchmarkClearFat72(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat128(b *testing.B) {
+func ClearFat128(b *testing.B) {
 	p := new([128 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -663,7 +663,7 @@ func BenchmarkClearFat128(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat256(b *testing.B) {
+func ClearFat256(b *testing.B) {
 	p := new([256 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -672,7 +672,7 @@ func BenchmarkClearFat256(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat512(b *testing.B) {
+func ClearFat512(b *testing.B) {
 	p := new([512 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -681,7 +681,16 @@ func BenchmarkClearFat512(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat1024(b *testing.B) {
+func ClearFat520(b *testing.B) {
+	p := new([520 / 4]uint32)
+	Escape(p)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		*p = [520 / 4]uint32{}
+	}
+}
+
+func ClearFat1024(b *testing.B) {
 	p := new([1024 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -690,7 +699,7 @@ func BenchmarkClearFat1024(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat1032(b *testing.B) {
+func ClearFat1032(b *testing.B) {
 	p := new([1032 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
@@ -699,13 +708,81 @@ func BenchmarkClearFat1032(b *testing.B) {
 	}
 }
 
-func BenchmarkClearFat1040(b *testing.B) {
+func ClearFat1040(b *testing.B) {
 	p := new([1040 / 4]uint32)
 	Escape(p)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		*p = [1040 / 4]uint32{}
 	}
+}
+
+func ClearFat2040(b *testing.B) {
+	p := new([2040 / 4]uint32)
+	Escape(p)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		*p = [2040 / 4]uint32{}
+	}
+}
+
+func ClearFat2048(b *testing.B) {
+	p := new([2048 / 4]uint32)
+	Escape(p)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		*p = [2048 / 4]uint32{}
+	}
+}
+
+func ClearFat2056(b *testing.B) {
+	p := new([2056 / 4]uint32)
+	Escape(p)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		*p = [2056 / 4]uint32{}
+	}
+}
+
+func BenchmarkClearFat(b *testing.B) {
+	funcMap := map[int]func(b *testing.B){
+		7:    ClearFat7,
+		8:    ClearFat8,
+		11:   ClearFat11,
+		12:   ClearFat12,
+		13:   ClearFat13,
+		14:   ClearFat14,
+		15:   ClearFat15,
+		16:   ClearFat16,
+		24:   ClearFat24,
+		32:   ClearFat32,
+		40:   ClearFat40,
+		48:   ClearFat48,
+		56:   ClearFat56,
+		64:   ClearFat64,
+		72:   ClearFat72,
+		128:  ClearFat128,
+		256:  ClearFat256,
+		512:  ClearFat512,
+		520:  ClearFat520,
+		1024: ClearFat1024,
+		1032: ClearFat1032,
+		1040: ClearFat1040,
+		2040: ClearFat2040,
+		2048: ClearFat2048,
+		2056: ClearFat2056,
+	}
+	sizes := make([]int, 0, len(funcMap))
+	for k := range funcMap {
+		sizes = append(sizes, k)
+	}
+	sort.Ints(sizes)
+
+	benchmarkSizes(b, sizes, func(b *testing.B, n int) {
+		if fn, err := funcMap[n]; err {
+			fn(b)
+		}
+	})
 }
 
 func CopyFat7(b *testing.B) {
