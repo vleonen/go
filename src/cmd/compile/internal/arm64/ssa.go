@@ -1057,18 +1057,31 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To.Sym = ir.Syms.Duffzero
 		p.To.Offset = v.AuxInt
 	case ssa.OpARM64LoweredZero:
-		// STP.P	(ZR,ZR), 16(R16)
+		// TODO: fill F register with zero in single instruction, use F16 instead of F0
+		// FMOVD	$0, F0 // fmov d0, xzr
+		// FMOVD	$0, F1 // fmov d1, xzr
+		// FSTP.P	(F0,F0), 32(R16)
 		// CMP	Rarg1, R16
 		// BLE	-2(PC)
 		// arg1 is the address of the last 16-byte unit to zero
-		p := s.Prog(arm64.ASTP)
+		a := s.Prog(arm64.AFMOVD)
+		a.From.Type = obj.TYPE_CONST
+		a.From.Offset = 0
+		a.To.Type = obj.TYPE_REG
+		a.To.Reg = arm64.REG_F0
+		a2 := s.Prog(arm64.AFMOVD)
+		a2.From.Type = obj.TYPE_CONST
+		a2.From.Offset = 0
+		a2.To.Type = obj.TYPE_REG
+		a2.To.Reg = arm64.REG_F1
+		p := s.Prog(arm64.AFSTPQ)
 		p.Scond = arm64.C_XPOST
 		p.From.Type = obj.TYPE_REGREG
-		p.From.Reg = arm64.REGZERO
-		p.From.Offset = int64(arm64.REGZERO)
+		p.From.Reg = arm64.REG_F0
+		p.From.Offset = int64(arm64.REG_F0)
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = arm64.REG_R16
-		p.To.Offset = 16
+		p.To.Offset = 32
 		p2 := s.Prog(arm64.ACMP)
 		p2.From.Type = obj.TYPE_REG
 		p2.From.Reg = v.Args[1].Reg()

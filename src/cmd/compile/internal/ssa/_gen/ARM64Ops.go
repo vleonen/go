@@ -563,9 +563,11 @@ func init() {
 		// arg1 = address of the last 16-byte unit to zero
 		// arg2 = mem
 		// returns mem
-		//	STP.P	(ZR,ZR), 16(R16)
-		//	CMP	Rarg1, R16
-		//	BLE	-2(PC)
+		//  FMOVD	$0, F0 // fmov d0, xzr
+		//  FMOVD	$0, F1 // fmov d1, xzr
+		//  FSTP.P	(F0,F0), 32(R16)
+		//  CMP	Rarg1, R16
+		//  BLE	-2(PC)
 		// Note: the-end-of-the-memory may be not a valid pointer. it's a problem if it is spilled.
 		// the-end-of-the-memory - 16 is with the area to zero, ok to spill.
 		{
@@ -573,7 +575,7 @@ func init() {
 			argLength: 3,
 			reg: regInfo{
 				inputs:   []regMask{buildReg("R16"), gp},
-				clobbers: buildReg("R16"),
+				clobbers: buildReg("R16 F0"),
 			},
 			clobberFlags:   true,
 			faultOnNilArg0: true,
