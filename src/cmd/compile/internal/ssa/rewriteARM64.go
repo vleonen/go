@@ -22278,55 +22278,100 @@ func rewriteValueARM64_OpZero(v *Value) bool {
 		v.AddArg4(ptr, v0, v0, mem)
 		return true
 	}
-	// match: (Zero [32] ptr mem)
-	// result: (STP [16] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [0] ptr (MOVDconst [0]) (MOVDconst [0]) mem))
+	// match: (Zero [s] ptr mem)
+	// cond: s > 16 && s <= 24
+	// result: (MOVDstore [int32(s-8)] ptr (MOVDconst [0]) (STP ptr (MOVDconst [0]) (MOVDconst [0]) mem))
 	for {
-		if auxIntToInt64(v.AuxInt) != 32 {
-			break
-		}
+		s := auxIntToInt64(v.AuxInt)
 		ptr := v_0
 		mem := v_1
-		v.reset(OpARM64STP)
-		v.AuxInt = int32ToAuxInt(16)
+		if !(s > 16 && s <= 24) {
+			break
+		}
+		v.reset(OpARM64MOVDstore)
+		v.AuxInt = int32ToAuxInt(int32(s - 8))
 		v0 := b.NewValue0(v.Pos, OpARM64MOVDconst, typ.UInt64)
 		v0.AuxInt = int64ToAuxInt(0)
 		v1 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
-		v1.AuxInt = int32ToAuxInt(0)
+		v1.AddArg4(ptr, v0, v0, mem)
+		v.AddArg3(ptr, v0, v1)
+		return true
+	}
+	// match: (Zero [s] ptr mem)
+	// cond: s > 24 && s <= 32
+	// result: (STP [int32(s-16)] ptr (MOVDconst [0]) (MOVDconst [0]) (STP ptr (MOVDconst [0]) (MOVDconst [0]) mem))
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		ptr := v_0
+		mem := v_1
+		if !(s > 24 && s <= 32) {
+			break
+		}
+		v.reset(OpARM64STP)
+		v.AuxInt = int32ToAuxInt(int32(s - 16))
+		v0 := b.NewValue0(v.Pos, OpARM64MOVDconst, typ.UInt64)
+		v0.AuxInt = int64ToAuxInt(0)
+		v1 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
 		v1.AddArg4(ptr, v0, v0, mem)
 		v.AddArg4(ptr, v0, v0, v1)
 		return true
 	}
-	// match: (Zero [48] ptr mem)
-	// result: (STP [32] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [16] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [0] ptr (MOVDconst [0]) (MOVDconst [0]) mem)))
+	// match: (Zero [s] ptr mem)
+	// cond: s > 32 && s <= 40
+	// result: (MOVDstore [int32(s-8)] ptr (MOVDconst [0]) (STP [16] ptr (MOVDconst [0]) (MOVDconst [0]) (STP ptr (MOVDconst [0]) (MOVDconst [0]) mem)))
 	for {
-		if auxIntToInt64(v.AuxInt) != 48 {
-			break
-		}
+		s := auxIntToInt64(v.AuxInt)
 		ptr := v_0
 		mem := v_1
-		v.reset(OpARM64STP)
-		v.AuxInt = int32ToAuxInt(32)
+		if !(s > 32 && s <= 40) {
+			break
+		}
+		v.reset(OpARM64MOVDstore)
+		v.AuxInt = int32ToAuxInt(int32(s - 8))
 		v0 := b.NewValue0(v.Pos, OpARM64MOVDconst, typ.UInt64)
 		v0.AuxInt = int64ToAuxInt(0)
 		v1 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
 		v1.AuxInt = int32ToAuxInt(16)
 		v2 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
-		v2.AuxInt = int32ToAuxInt(0)
+		v2.AddArg4(ptr, v0, v0, mem)
+		v1.AddArg4(ptr, v0, v0, v2)
+		v.AddArg3(ptr, v0, v1)
+		return true
+	}
+	// match: (Zero [s] ptr mem)
+	// cond: s > 40 && s <= 48
+	// result: (STP [int32(s-16)] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [16] ptr (MOVDconst [0]) (MOVDconst [0]) (STP ptr (MOVDconst [0]) (MOVDconst [0]) mem)))
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		ptr := v_0
+		mem := v_1
+		if !(s > 40 && s <= 48) {
+			break
+		}
+		v.reset(OpARM64STP)
+		v.AuxInt = int32ToAuxInt(int32(s - 16))
+		v0 := b.NewValue0(v.Pos, OpARM64MOVDconst, typ.UInt64)
+		v0.AuxInt = int64ToAuxInt(0)
+		v1 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
+		v1.AuxInt = int32ToAuxInt(16)
+		v2 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
 		v2.AddArg4(ptr, v0, v0, mem)
 		v1.AddArg4(ptr, v0, v0, v2)
 		v.AddArg4(ptr, v0, v0, v1)
 		return true
 	}
-	// match: (Zero [64] ptr mem)
-	// result: (STP [48] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [32] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [16] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [0] ptr (MOVDconst [0]) (MOVDconst [0]) mem))))
+	// match: (Zero [s] ptr mem)
+	// cond: s > 48 && s <= 56
+	// result: (MOVDstore [int32(s-8)] ptr (MOVDconst [0]) (STP [32] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [16] ptr (MOVDconst [0]) (MOVDconst [0]) (STP ptr (MOVDconst [0]) (MOVDconst [0]) mem))))
 	for {
-		if auxIntToInt64(v.AuxInt) != 64 {
-			break
-		}
+		s := auxIntToInt64(v.AuxInt)
 		ptr := v_0
 		mem := v_1
-		v.reset(OpARM64STP)
-		v.AuxInt = int32ToAuxInt(48)
+		if !(s > 48 && s <= 56) {
+			break
+		}
+		v.reset(OpARM64MOVDstore)
+		v.AuxInt = int32ToAuxInt(int32(s - 8))
 		v0 := b.NewValue0(v.Pos, OpARM64MOVDconst, typ.UInt64)
 		v0.AuxInt = int64ToAuxInt(0)
 		v1 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
@@ -22334,7 +22379,31 @@ func rewriteValueARM64_OpZero(v *Value) bool {
 		v2 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
 		v2.AuxInt = int32ToAuxInt(16)
 		v3 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
-		v3.AuxInt = int32ToAuxInt(0)
+		v3.AddArg4(ptr, v0, v0, mem)
+		v2.AddArg4(ptr, v0, v0, v3)
+		v1.AddArg4(ptr, v0, v0, v2)
+		v.AddArg3(ptr, v0, v1)
+		return true
+	}
+	// match: (Zero [s] ptr mem)
+	// cond: s > 56 && s <= 64
+	// result: (STP [int32(s-16)] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [32] ptr (MOVDconst [0]) (MOVDconst [0]) (STP [16] ptr (MOVDconst [0]) (MOVDconst [0]) (STP ptr (MOVDconst [0]) (MOVDconst [0]) mem))))
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		ptr := v_0
+		mem := v_1
+		if !(s > 56 && s <= 64) {
+			break
+		}
+		v.reset(OpARM64STP)
+		v.AuxInt = int32ToAuxInt(int32(s - 16))
+		v0 := b.NewValue0(v.Pos, OpARM64MOVDconst, typ.UInt64)
+		v0.AuxInt = int64ToAuxInt(0)
+		v1 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
+		v1.AuxInt = int32ToAuxInt(32)
+		v2 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
+		v2.AuxInt = int32ToAuxInt(16)
+		v3 := b.NewValue0(v.Pos, OpARM64STP, types.TypeMem)
 		v3.AddArg4(ptr, v0, v0, mem)
 		v2.AddArg4(ptr, v0, v0, v3)
 		v1.AddArg4(ptr, v0, v0, v2)

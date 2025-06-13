@@ -392,20 +392,30 @@
 (Zero [16] ptr mem) =>
 	(STP [0] ptr (MOVDconst [0]) (MOVDconst [0]) mem)
 
-(Zero [32] ptr mem) =>
-	(STP [16] ptr (MOVDconst [0]) (MOVDconst [0])
-		(STP [0] ptr (MOVDconst [0]) (MOVDconst [0]) mem))
-
-(Zero [48] ptr mem) =>
-	(STP [32] ptr (MOVDconst [0]) (MOVDconst [0])
+(Zero [s] ptr mem) && s > 16 && s <= 24 =>
+	(MOVDstore [int32(s-8)] ptr (MOVDconst [0])
+		(STP ptr (MOVDconst [0]) (MOVDconst [0]) mem))
+(Zero [s] ptr mem) && s > 24 && s <= 32 =>
+	(STP [int32(s-16)] ptr (MOVDconst [0]) (MOVDconst [0])
+		(STP ptr (MOVDconst [0]) (MOVDconst [0]) mem))
+(Zero [s] ptr mem) && s > 32 && s <= 40 =>
+	(MOVDstore [int32(s-8)] ptr (MOVDconst [0])
 		(STP [16] ptr (MOVDconst [0]) (MOVDconst [0])
-			(STP [0] ptr (MOVDconst [0]) (MOVDconst [0]) mem)))
-
-(Zero [64] ptr mem) =>
-	(STP [48] ptr (MOVDconst [0]) (MOVDconst [0])
+			(STP ptr (MOVDconst [0]) (MOVDconst [0]) mem)))
+(Zero [s] ptr mem) && s > 40 && s <= 48 =>
+	(STP [int32(s-16)] ptr (MOVDconst [0]) (MOVDconst [0])
+		(STP [16] ptr (MOVDconst [0]) (MOVDconst [0])
+			(STP ptr (MOVDconst [0]) (MOVDconst [0]) mem)))
+(Zero [s] ptr mem) && s > 48 && s <= 56 =>
+	(MOVDstore [int32(s-8)] ptr (MOVDconst [0])
 		(STP [32] ptr (MOVDconst [0]) (MOVDconst [0])
 			(STP [16] ptr (MOVDconst [0]) (MOVDconst [0])
-				(STP [0] ptr (MOVDconst [0]) (MOVDconst [0]) mem))))
+				(STP ptr (MOVDconst [0]) (MOVDconst [0]) mem))))
+(Zero [s] ptr mem) && s > 56 && s <= 64 =>
+	(STP [int32(s-16)] ptr (MOVDconst [0]) (MOVDconst [0])
+		(STP [32] ptr (MOVDconst [0]) (MOVDconst [0])
+			(STP [16] ptr (MOVDconst [0]) (MOVDconst [0])
+				(STP ptr (MOVDconst [0]) (MOVDconst [0]) mem))))
 
 // strip off fractional word zeroing
 (Zero [s] ptr mem) && s%16 != 0 && s%16 <= 8 && s > 16 =>
