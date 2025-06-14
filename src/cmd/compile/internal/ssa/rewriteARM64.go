@@ -23571,13 +23571,13 @@ func rewriteValueARM64_OpZero(v *Value) bool {
 		return true
 	}
 	// match: (Zero [s] ptr mem)
-	// cond: s%16 != 0 && s%16 <= 8 && s > 16
-	// result: (Zero [8] (OffPtr <ptr.Type> ptr [s-8]) (Zero [s-s%16] ptr mem))
+	// cond: s%32 != 0 && s%32 <= 8 && s > 64
+	// result: (Zero [8] (OffPtr <ptr.Type> ptr [s-8]) (Zero [s-s%32] ptr mem))
 	for {
 		s := auxIntToInt64(v.AuxInt)
 		ptr := v_0
 		mem := v_1
-		if !(s%16 != 0 && s%16 <= 8 && s > 16) {
+		if !(s%32 != 0 && s%32 <= 8 && s > 64) {
 			break
 		}
 		v.reset(OpZero)
@@ -23586,19 +23586,19 @@ func rewriteValueARM64_OpZero(v *Value) bool {
 		v0.AuxInt = int64ToAuxInt(s - 8)
 		v0.AddArg(ptr)
 		v1 := b.NewValue0(v.Pos, OpZero, types.TypeMem)
-		v1.AuxInt = int64ToAuxInt(s - s%16)
+		v1.AuxInt = int64ToAuxInt(s - s%32)
 		v1.AddArg2(ptr, mem)
 		v.AddArg2(v0, v1)
 		return true
 	}
 	// match: (Zero [s] ptr mem)
-	// cond: s%16 != 0 && s%16 > 8 && s > 16
-	// result: (Zero [16] (OffPtr <ptr.Type> ptr [s-16]) (Zero [s-s%16] ptr mem))
+	// cond: s%32 != 0 && s%32 > 8 && s%32 <= 16 && s > 64
+	// result: (Zero [16] (OffPtr <ptr.Type> ptr [s-16]) (Zero [s-s%32] ptr mem))
 	for {
 		s := auxIntToInt64(v.AuxInt)
 		ptr := v_0
 		mem := v_1
-		if !(s%16 != 0 && s%16 > 8 && s > 16) {
+		if !(s%32 != 0 && s%32 > 8 && s%32 <= 16 && s > 64) {
 			break
 		}
 		v.reset(OpZero)
@@ -23607,7 +23607,49 @@ func rewriteValueARM64_OpZero(v *Value) bool {
 		v0.AuxInt = int64ToAuxInt(s - 16)
 		v0.AddArg(ptr)
 		v1 := b.NewValue0(v.Pos, OpZero, types.TypeMem)
-		v1.AuxInt = int64ToAuxInt(s - s%16)
+		v1.AuxInt = int64ToAuxInt(s - s%32)
+		v1.AddArg2(ptr, mem)
+		v.AddArg2(v0, v1)
+		return true
+	}
+	// match: (Zero [s] ptr mem)
+	// cond: s%32 != 0 && s%32 > 16 && s%32 <= 24 && s > 64
+	// result: (Zero [24] (OffPtr <ptr.Type> ptr [s-24]) (Zero [s-s%32] ptr mem))
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		ptr := v_0
+		mem := v_1
+		if !(s%32 != 0 && s%32 > 16 && s%32 <= 24 && s > 64) {
+			break
+		}
+		v.reset(OpZero)
+		v.AuxInt = int64ToAuxInt(24)
+		v0 := b.NewValue0(v.Pos, OpOffPtr, ptr.Type)
+		v0.AuxInt = int64ToAuxInt(s - 24)
+		v0.AddArg(ptr)
+		v1 := b.NewValue0(v.Pos, OpZero, types.TypeMem)
+		v1.AuxInt = int64ToAuxInt(s - s%32)
+		v1.AddArg2(ptr, mem)
+		v.AddArg2(v0, v1)
+		return true
+	}
+	// match: (Zero [s] ptr mem)
+	// cond: s%32 != 0 && s%32 > 24 && s%32 <= 32 && s > 64
+	// result: (Zero [32] (OffPtr <ptr.Type> ptr [s-32]) (Zero [s-s%32] ptr mem))
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		ptr := v_0
+		mem := v_1
+		if !(s%32 != 0 && s%32 > 24 && s%32 <= 32 && s > 64) {
+			break
+		}
+		v.reset(OpZero)
+		v.AuxInt = int64ToAuxInt(32)
+		v0 := b.NewValue0(v.Pos, OpOffPtr, ptr.Type)
+		v0.AuxInt = int64ToAuxInt(s - 32)
+		v0.AddArg(ptr)
+		v1 := b.NewValue0(v.Pos, OpZero, types.TypeMem)
+		v1.AuxInt = int64ToAuxInt(s - s%32)
 		v1.AddArg2(ptr, mem)
 		v.AddArg2(v0, v1)
 		return true
@@ -23628,18 +23670,18 @@ func rewriteValueARM64_OpZero(v *Value) bool {
 		return true
 	}
 	// match: (Zero [s] ptr mem)
-	// cond: s%16 == 0 && (s > 16*64 || config.noDuffDevice)
-	// result: (LoweredZero ptr (ADDconst <ptr.Type> [s-16] ptr) mem)
+	// cond: s%32 == 0 && (s > 16*64 || config.noDuffDevice)
+	// result: (LoweredZero ptr (ADDconst <ptr.Type> [s-32] ptr) mem)
 	for {
 		s := auxIntToInt64(v.AuxInt)
 		ptr := v_0
 		mem := v_1
-		if !(s%16 == 0 && (s > 16*64 || config.noDuffDevice)) {
+		if !(s%32 == 0 && (s > 16*64 || config.noDuffDevice)) {
 			break
 		}
 		v.reset(OpARM64LoweredZero)
 		v0 := b.NewValue0(v.Pos, OpARM64ADDconst, ptr.Type)
-		v0.AuxInt = int64ToAuxInt(s - 16)
+		v0.AuxInt = int64ToAuxInt(s - 32)
 		v0.AddArg(ptr)
 		v.AddArg3(ptr, v0, mem)
 		return true
