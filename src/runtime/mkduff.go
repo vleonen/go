@@ -169,9 +169,9 @@ func copyARM64(w io.Writer) {
 	// R20 and R21 are updated as a side effect
 	fmt.Fprintln(w, "TEXT runtime·duffcopy<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-0")
 
-	for i := 0; i < 64; i++ {
-		fmt.Fprintln(w, "\tLDP.P\t16(R20), (R26, R27)")
-		fmt.Fprintln(w, "\tSTP.P\t(R26, R27), 16(R21)")
+	for i := 0; i < 32; i++ {
+		fmt.Fprintln(w, "\tFLDPQ.P\t32(R20), (F16, F17)")
+		fmt.Fprintln(w, "\tFSTPQ.P\t(F16, F17), 32(R21)")
 		fmt.Fprintln(w)
 	}
 	fmt.Fprintln(w, "\tRET")
