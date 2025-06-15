@@ -555,7 +555,7 @@ func init() {
 			argLength: 3,
 			reg: regInfo{
 				inputs:   []regMask{buildReg("R16"), gp},
-				clobbers: buildReg("R16 F0"),
+				clobbers: buildReg("R16 F16"),
 			},
 			clobberFlags:   true,
 			faultOnNilArg0: true,
