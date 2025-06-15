@@ -1007,8 +1007,9 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To.Sym = ir.Syms.Duffzero
 		p.To.Offset = v.AuxInt
 	case ssa.OpARM64LoweredZero:
-		// VMOVI        $0, F16
-		// FSTP.P       (F16,F16), 32(R16)
+		// VMOVI        $0, V16
+		// VMOVI        $0, V17
+		// ST1			[V16.D2, V17.D2], 32(R16)
 		// CMP	Rarg1, R16
 		// BLE	-2(PC)
 		// arg1 is the address of the last 16-byte unit to zero
@@ -1016,12 +1017,18 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		f.From.Type = obj.TYPE_CONST
 		f.From.Offset = 0
 		f.To.Type = obj.TYPE_REG
-		f.To.Reg = arm64.REG_ARNG + (arm64.REG_F16 & 31) + ((arm64.ARNG_16B & 15) << 5)
-		p := s.Prog(arm64.AFSTPQ)
+		f.To.Reg = arm64.REG_ARNG + (arm64.REG_V16 & 31) + ((arm64.ARNG_16B & 15) << 5)
+		f2 := s.Prog(arm64.AVMOVI)
+		f2.From.Type = obj.TYPE_CONST
+		f2.From.Offset = 0
+		f2.To.Type = obj.TYPE_REG
+		f2.To.Reg = arm64.REG_ARNG + (arm64.REG_V17 & 31) + ((arm64.ARNG_16B & 15) << 5)
+		p := s.Prog(arm64.AVST1)
 		p.Scond = arm64.C_XPOST
-		p.From.Type = obj.TYPE_REGREG
-		p.From.Reg = arm64.REG_F16
-		p.From.Offset = int64(arm64.REG_F16)
+		p.From.Type = obj.TYPE_REGLIST
+		// see cmd/asm/internal/arch/arm64.go:ARM64RegisterListOffset
+		// see src/cmd/asm/internal/arch/arm64.go:ARM64RegisterArrangement
+		p.From.Offset = int64(arm64.REG_ARNG+(arm64.REG_V16&31)) | 0xa<<12 | 1<<60 | (int64(1) << 30) | (int64(3) << 10)
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = arm64.REG_R16
 		p.To.Offset = 32
