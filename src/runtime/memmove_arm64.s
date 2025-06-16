@@ -136,35 +136,36 @@ backward_check:
 	BCC	copy_long_backward
 
 	// Copy 16 bytes and then align src (R1) or dst (R0) to 16-byte alignment.
-	FMOVQ	(R1), F3			// Load     D
+	VLD1	(R1), [V3.D2]			// Load     D
 	AND	$15, R7, R14         // Calculate the realignment offset
 	SUB	R14, R1, R1
 	SUB	R14, R0, R3          // move dst back same amount as src
 	ADD	R14, R2, R2
-	FLDPQ	16(R1), (F0, F1)	// Load  AB
-	FMOVQ	F3, (R0)			// Store    D
-	FLDPQ.W	48(R1), (F2, F3)	// Load    CD
-	SUB		$16, R3, R3
+	ADD		$16, R1, R1
+	VLD1.P	32(R1), [V0.D2, V1.D2]	// Load  AB
+	VST1	[V3.D2], (R0)			// Store    D
+	VLD1.P	32(R1), [V2.D2, V3.D2]	// Load    CD
 	// 80 bytes have been loaded; if less than 80+64 bytes remain, copy from the end
+	ADD		$16, R3, R3
 	SUBS	$144, R2, R2
 	BLS	copy64_from_end
 
 loop64:
-	FSTPQ	(F0, F1), 32(R3)	// Store AB
-	FLDPQ	32(R1), (F0, F1)	// Load  AB
-	FSTPQ.W	(F2, F3), 64(R3)	// Store   CD
-	FLDPQ.W	64(R1), (F2, F3)	// Load    CD
+	VST1.P	[V0.D2, V1.D2, V2.D2, V3.D2], 64(R3)	// Store ABCD
+	VLD1.P	64(R1), [V0.D2, V1.D2, V2.D2, V3.D2]	// Load  ABCD
 	SUBS	$64, R2, R2
 	BHI	loop64
 
 	// Write the last iteration and copy 64 bytes from the end.
 copy64_from_end:
-	FLDPQ	-64(R4), (F4, F5)	// Load      EF
-	FSTPQ	(F0, F1), 32(R3)	// Store AB
-	FLDPQ	-32(R4), (F0, F1)	// Load  AB
-	FSTPQ	(F2, F3), 64(R3)	// Store   CD
-	FSTPQ	(F4, F5), -64(R5)	// Store     EF
-	FSTPQ	(F0, F1), -32(R5)	// Store AB
+	SUB $64, R4, R4
+	SUB $64, R5, R5
+	VLD1.P	32(R4), [V4.D2, V5.D2]	// Load      EF
+	VST1.P	[V0.D2, V1.D2], 32(R3)	// Store AB
+	VLD1.P	32(R4), [V0.D2, V1.D2]	// Load  AB
+	VST1	[V2.D2, V3.D2], (R3)	// Store   CD
+	VST1.P	[V4.D2, V5.D2], 32(R5)	// Store     EF
+	VST1.P	[V0.D2, V1.D2], 32(R5)	// Store AB
 	RET
 
 	// Large backward copy for overlapping copies.
