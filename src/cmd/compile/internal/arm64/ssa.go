@@ -1102,6 +1102,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		}
 	case ssa.OpARM64LoweredZeroLoop:
 		ptrReg := v.Args[0].Reg()
+		zeroFReg := int16(arm64.REG_F16)
 		countReg := v.RegTmp()
 		n := v.AuxInt
 		loopSize := int64(64)
@@ -1117,9 +1118,19 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 			v.Fatalf("ZeroLoop size too small %d", n)
 		}
 
+		//   VMOVI    $0, V16.B16
+		p := s.Prog(arm64.AVMOVI)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 0
+		p.To.Type = obj.TYPE_REG
+		err := arm64.ARM64RegisterExtension(&p.To, "B16", arm64.REG_V16, 0, false, false)
+		if err != nil {
+			v.Fatalf("Incorrect register encoding in LoweredZeroLoop: %v", err)
+		}
+
 		// Put iteration count in a register.
 		//   MOVD    $n, countReg
-		p := s.Prog(arm64.AMOVD)
+		p = s.Prog(arm64.AMOVD)
 		p.From.Type = obj.TYPE_CONST
 		p.From.Offset = n / loopSize
 		p.To.Type = obj.TYPE_REG
@@ -1128,13 +1139,13 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 
 		// Zero loopSize bytes starting at ptrReg.
 		// Increment ptrReg by loopSize as a side effect.
-		for range loopSize / 16 {
-			//  STP.P   (ZR, ZR), 16(ptrReg)
-			zero16(s, ptrReg, 0, true)
+		for range loopSize / 32 {
+			//  FSTPQ.P  (zeroFReg, zeroFReg), 32(ptrReg)
+			zero32(s, ptrReg, zeroFReg, 0, true)
 			// TODO: should we use the postincrement form,
 			// or use a separate += 64 instruction?
 			// postincrement saves an instruction, but maybe
-			// it requires more integer units to do the +=16s.
+			// it requires more integer units to do the +=32s.
 		}
 		// Decrement loop count.
 		//   SUB     $1, countReg
@@ -1156,9 +1167,15 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 
 		// Write any fractional portion.
 		var off int64
+		for n >= 32 {
+			//  FSTPQ  (zeroFReg, zeroFReg), off(ptrReg)
+			zero32(s, ptrReg, zeroFReg, off, false)
+			off += 32
+			n -= 32
+		}
 		for n >= 16 {
-			//  STP     (ZR, ZR), off(ptrReg)
-			zero16(s, ptrReg, off, false)
+			//  FMOVQ  zeroFReg, off(ptrReg)
+			zero16f(s, ptrReg, zeroFReg, off, false)
 			off += 16
 			n -= 16
 		}
@@ -1681,6 +1698,48 @@ func spillArgReg(pp *objw.Progs, p *obj.Prog, f *ssa.Func, t *types.Type, reg in
 	p.To.Sym = n.Linksym()
 	p.Pos = p.Pos.WithNotStmt()
 	return p
+}
+
+// zero32 zeroes 32 bytes at reg+off.
+// If postInc is true, increment reg by 32.
+func zero32(s *ssagen.State, reg, zeroFReg int16, off int64, postInc bool) {
+	//   FSTPQ     (zeroFReg, zeroFReg), off(reg)
+	p := s.Prog(arm64.AFSTPQ)
+	p.From.Type = obj.TYPE_REGREG
+	p.From.Reg = zeroFReg
+	p.From.Offset = int64(zeroFReg)
+	p.To.Type = obj.TYPE_MEM
+	p.To.Reg = reg
+	p.To.Offset = off
+
+	if postInc {
+		if off != 0 {
+			panic("can't postinc with non-zero offset")
+		}
+		//   FSTPQ.P  (zeroFReg, zeroFReg), 32(reg)
+		p.Scond = arm64.C_XPOST
+		p.To.Offset = 32
+	}
+}
+
+// zero16f zeroes 16 bytes at reg+off.
+// If postInc is true, increment reg by 16.
+func zero16f(s *ssagen.State, reg, zeroFReg int16, off int64, postInc bool) {
+	//   FMOVQ     tmp1, off(dst)
+	p := s.Prog(arm64.AFMOVQ)
+	p.From.Type = obj.TYPE_REG
+	p.From.Reg = zeroFReg
+	p.To.Type = obj.TYPE_MEM
+	p.To.Reg = reg
+	p.To.Offset = off
+	if postInc {
+		if off != 0 {
+			panic("can't postinc with non-zero offset")
+		}
+		//   FMOVQ.P     tmp1, off(dst)
+		p.Scond = arm64.C_XPOST
+		p.To.Offset = 16
+	}
 }
 
 // zero16 zeroes 16 bytes at reg+off.

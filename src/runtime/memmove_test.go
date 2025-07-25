@@ -1080,6 +1080,7 @@ func BenchmarkIssue18740(b *testing.B) {
 }
 
 var memclrSink []int8
+var memclrSink64 []int64
 
 func BenchmarkMemclrKnownSize1(b *testing.B) {
 	var x [1]int8
@@ -1276,6 +1277,142 @@ func BenchmarkMemclrKnownSize512KiB(b *testing.B) {
 	}
 
 	memclrSink = x[:]
+}
+
+func BenchmarkMemclrKnownSize64_Set16(b *testing.B) {
+	const sz = int64(64 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
+}
+func BenchmarkMemclrKnownSize96_Set16(b *testing.B) {
+	const sz = int64(96 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
+}
+func BenchmarkMemclrKnownSize112_Set16(b *testing.B) {
+	const sz = int64(112 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
+}
+func BenchmarkMemclrKnownSize128_Set16(b *testing.B) {
+	const sz = int64(128 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
+}
+func BenchmarkMemclrKnownSize248_Set16(b *testing.B) {
+	const sz = int64(248 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
+}
+func BenchmarkMemclrKnownSize256_Set16(b *testing.B) {
+	const sz = int64(256 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
+}
+func BenchmarkMemclrKnownSize512_Set16(b *testing.B) {
+	const sz = int64(512 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
+}
+func BenchmarkMemclrKnownSize1024_Set16(b *testing.B) {
+	const sz = int64(1024 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
+}
+func BenchmarkMemclrKnownSize4096_Set16(b *testing.B) {
+	const sz = int64(4096 / 8)
+	var x [sz]int64
+
+	b.SetBytes(sz * 8)
+	for i := 0; i < b.N; i++ {
+		for a := range x {
+			x[a] = 0
+		}
+		x[3]++
+		x[sz-1]++
+	}
+
+	memclrSink64 = x[:]
 }
 
 func BenchmarkMemmoveKnownSize112(b *testing.B) {

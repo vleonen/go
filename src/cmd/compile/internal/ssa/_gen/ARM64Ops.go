@@ -146,6 +146,7 @@ func init() {
 		callerSave = gp | fp | buildReg("g") // runtime.setg (and anything calling it) may clobber g
 		r25        = buildReg("R25")
 		r24to25    = buildReg("R24 R25")
+		f16        = buildReg("F16")
 		f16to17    = buildReg("F16 F17")
 		rz         = buildReg("ZERO")
 		first16    = buildReg("R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15")
@@ -567,7 +568,8 @@ func init() {
 			aux:       "Int64",
 			argLength: 2,
 			reg: regInfo{
-				inputs: []regMask{gp},
+				inputs:   []regMask{gp},
+				clobbers: f16,
 			},
 			faultOnNilArg0: true,
 		},
@@ -583,6 +585,7 @@ func init() {
 			argLength: 2,
 			reg: regInfo{
 				inputs:       []regMask{gp},
+				clobbers:     f16,
 				clobbersArg0: true,
 			},
 			faultOnNilArg0: true,
