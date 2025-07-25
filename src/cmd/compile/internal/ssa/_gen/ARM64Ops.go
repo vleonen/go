@@ -564,10 +564,12 @@ func init() {
 			argLength: 2,
 			reg: regInfo{
 				inputs:       []regMask{gp},
+				clobbers:     buildReg("F16"),
 				clobbersArg0: true,
 			},
 			faultOnNilArg0: true,
 			needIntTemp:    true,
+			unsafePoint:    true,
 		},
 
 		// medium copying

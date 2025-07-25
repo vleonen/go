@@ -1081,6 +1081,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		}
 	case ssa.OpARM64LoweredZeroLoop:
 		ptrReg := v.Args[0].Reg()
+		zeroFReg := int16(arm64.REG_F16)
 		countReg := v.RegTmp()
 		n := v.AuxInt
 		loopSize := int64(64)
@@ -1105,11 +1106,18 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To.Reg = countReg
 		cntInit := p
 
+		//   VMOVI        $0, V16.B16
+		f := s.Prog(arm64.AVMOVI)
+		f.From.Type = obj.TYPE_CONST
+		f.From.Offset = 0
+		f.To.Type = obj.TYPE_REG
+		// see src/cmd/asm/internal/arch/arm64.go : ARM64RegisterExtension
+		f.To.Reg = arm64.REG_ARNG + (arm64.REG_V16 & 31) + ((arm64.ARNG_16B & 15) << 5)
 		// Zero loopSize bytes starting at ptrReg.
 		// Increment ptrReg by loopSize as a side effect.
-		for range loopSize / 16 {
-			//  STP.P   (ZR, ZR), 16(ptrReg)
-			zero16(s, ptrReg, 0, true)
+		for range loopSize / 32 {
+			//  FSTP.P   (zeroFReg, zeroFReg), 16(ptrReg)
+			zero32(s, ptrReg, zeroFReg, 0, true)
 			// TODO: should we use the postincrement form,
 			// or use a separate += 64 instruction?
 			// postincrement saves an instruction, but maybe
@@ -1653,6 +1661,28 @@ func spillArgReg(pp *objw.Progs, p *obj.Prog, f *ssa.Func, t *types.Type, reg in
 	p.To.Sym = n.Linksym()
 	p.Pos = p.Pos.WithNotStmt()
 	return p
+}
+
+// zero32 zeroes 32 bytes at reg+off.
+// If postInc is true, increment reg by 32.
+func zero32(s *ssagen.State, reg, zeroFReg int16, off int64, postInc bool) {
+	//   FSTPQ     (zeroFReg, zeroFReg), off(reg)
+	p := s.Prog(arm64.AFSTPQ)
+	p.From.Type = obj.TYPE_REGREG
+	p.From.Reg = zeroFReg
+	p.From.Offset = int64(zeroFReg)
+	p.To.Type = obj.TYPE_MEM
+	p.To.Reg = reg
+	p.To.Offset = off
+
+	if postInc {
+		if off != 0 {
+			panic("can't postinc with non-zero offset")
+		}
+		//   FSTPQ.P  (zeroFReg, zeroFReg), 32(reg)
+		p.Scond = arm64.C_XPOST
+		p.To.Offset = 32
+	}
 }
 
 // zero16 zeroes 16 bytes at reg+off.
