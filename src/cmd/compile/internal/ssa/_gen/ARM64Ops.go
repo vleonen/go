@@ -603,12 +603,13 @@ func init() {
 			argLength: 3,
 			reg: regInfo{
 				inputs:       []regMask{gp &^ r23to25, gp &^ r23to25},
-				clobbers:     r23to25, // TODO: figure out needIntTemp x3
+				clobbers:     r23to25 | buildReg("F16"), // TODO: figure out needIntTemp x3
 				clobbersArg0: true,
 				clobbersArg1: true,
 			},
 			faultOnNilArg0: true,
 			faultOnNilArg1: true,
+			unsafePoint:    true,
 		},
 
 		// Scheduler ensures LoweredGetClosurePtr occurs only in entry block,
