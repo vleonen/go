@@ -23105,10 +23105,10 @@ var opcodeTable = [...]opInfo{
 		faultOnNilArg1: true,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 310378495}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R26 R30
-				{1, 310378495}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R26 R30
+				{0, 318767103}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R26 R30
+				{1, 318767103}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R26 R30
 			},
-			clobbers: 25165824, // R24 R25
+			clobbers: 422212481843200, // R25 F16 F17
 		},
 	},
 	{
@@ -23117,13 +23117,12 @@ var opcodeTable = [...]opInfo{
 		argLen:         3,
 		faultOnNilArg0: true,
 		faultOnNilArg1: true,
-		unsafePoint:    true,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 306184191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R26 R30
-				{1, 306184191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R26 R30
+				{0, 310378495}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R26 R30
+				{1, 310378495}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R26 R30
 			},
-			clobbers:     422212494426112, // R23 R24 R25 F16 F17
+			clobbers:     422212490231808, // R24 R25 F16 F17
 			clobbersArg0: true,
 			clobbersArg1: true,
 		},
