@@ -1243,6 +1243,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.From.Offset = n / loopSize
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = countReg
+
+		p = s.Prog(obj.APCALIGNMAX)
+		p.From.SetConst(16)
+		p.To.SetConst(8)
 		cntInit := p
 
 		// Move loopSize bytes starting at srcReg to dstReg.
