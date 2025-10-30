@@ -1304,6 +1304,62 @@ func BenchmarkMemmoveKnownSize128(b *testing.B) {
 
 	memclrSink = p.x[:]
 }
+func BenchmarkMemmoveKnownSize132(b *testing.B) {
+	type T struct {
+		x [132]int8
+	}
+	p := &T{}
+	q := &T{}
+
+	b.SetBytes(int64(unsafe.Sizeof(T{})))
+	for i := 0; i < b.N; i++ {
+		*p = *q
+	}
+
+	memclrSink = p.x[:]
+}
+func BenchmarkMemmoveKnownSize136(b *testing.B) {
+	type T struct {
+		x [136]int8
+	}
+	p := &T{}
+	q := &T{}
+
+	b.SetBytes(int64(unsafe.Sizeof(T{})))
+	for i := 0; i < b.N; i++ {
+		*p = *q
+	}
+
+	memclrSink = p.x[:]
+}
+func BenchmarkMemmoveKnownSize144(b *testing.B) {
+	type T struct {
+		x [144]int8
+	}
+	p := &T{}
+	q := &T{}
+
+	b.SetBytes(int64(unsafe.Sizeof(T{})))
+	for i := 0; i < b.N; i++ {
+		*p = *q
+	}
+
+	memclrSink = p.x[:]
+}
+func BenchmarkMemmoveKnownSize152(b *testing.B) {
+	type T struct {
+		x [152]int8
+	}
+	p := &T{}
+	q := &T{}
+
+	b.SetBytes(int64(unsafe.Sizeof(T{})))
+	for i := 0; i < b.N; i++ {
+		*p = *q
+	}
+
+	memclrSink = p.x[:]
+}
 func BenchmarkMemmoveKnownSize192(b *testing.B) {
 	type T struct {
 		x [192]int8
@@ -1335,6 +1391,62 @@ func BenchmarkMemmoveKnownSize248(b *testing.B) {
 func BenchmarkMemmoveKnownSize256(b *testing.B) {
 	type T struct {
 		x [256]int8
+	}
+	p := &T{}
+	q := &T{}
+
+	b.SetBytes(int64(unsafe.Sizeof(T{})))
+	for i := 0; i < b.N; i++ {
+		*p = *q
+	}
+
+	memclrSink = p.x[:]
+}
+func BenchmarkMemmoveKnownSize260(b *testing.B) {
+	type T struct {
+		x [260]int8
+	}
+	p := &T{}
+	q := &T{}
+
+	b.SetBytes(int64(unsafe.Sizeof(T{})))
+	for i := 0; i < b.N; i++ {
+		*p = *q
+	}
+
+	memclrSink = p.x[:]
+}
+func BenchmarkMemmoveKnownSize264(b *testing.B) {
+	type T struct {
+		x [264]int8
+	}
+	p := &T{}
+	q := &T{}
+
+	b.SetBytes(int64(unsafe.Sizeof(T{})))
+	for i := 0; i < b.N; i++ {
+		*p = *q
+	}
+
+	memclrSink = p.x[:]
+}
+func BenchmarkMemmoveKnownSize272(b *testing.B) {
+	type T struct {
+		x [272]int8
+	}
+	p := &T{}
+	q := &T{}
+
+	b.SetBytes(int64(unsafe.Sizeof(T{})))
+	for i := 0; i < b.N; i++ {
+		*p = *q
+	}
+
+	memclrSink = p.x[:]
+}
+func BenchmarkMemmoveKnownSize280(b *testing.B) {
+	type T struct {
+		x [280]int8
 	}
 	p := &T{}
 	q := &T{}
