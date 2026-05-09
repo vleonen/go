@@ -112,6 +112,7 @@ var (
 	flagEntrySymbol   = flag.String("E", "", "set `entry` symbol name")
 	flagPruneWeakMap  = flag.Bool("pruneweakmap", true, "prune weak mapinit refs")
 	flagRandLayout    = flag.Int64("randlayout", 0, "randomize function layout")
+	flagEmitRelocs    = flag.Bool("emit-relocs", false, "emit ELF relocation sections in output binary")
 	flagAllErrors     = flag.Bool("e", false, "no limit on number of errors reported")
 	cpuprofile        = flag.String("cpuprofile", "", "write cpu profile to `file`")
 	memprofile        = flag.String("memprofile", "", "write memory profile to `file`")
@@ -253,6 +254,15 @@ func Main(arch *sys.Arch, theArch Arch) {
 		Exitf("dynamic linking required on %s; -d flag cannot be used", buildcfg.GOOS)
 	}
 
+	if *flagEmitRelocs {
+		if *FlagS {
+			Exitf("-emit-relocs requires symbol table, cannot use with -s")
+		}
+		if ctxt.LinkMode == LinkExternal {
+			Exitf("-emit-relocs is only for internal linking; external linking already emits relocation sections")
+		}
+	}
+
 	isPowerOfTwo := func(n int64) bool {
 		return n > 0 && n&(n-1) == 0
 	}
@@ -323,6 +333,13 @@ func Main(arch *sys.Arch, theArch Arch) {
 	ctxt.computeTLSOffset()
 	bench.Start("Archinit")
 	thearch.Archinit(ctxt)
+
+	if *flagEmitRelocs && ctxt.IsELF {
+		HEADR += HEADR
+		if *FlagTextAddr != -1 {
+			*FlagTextAddr += int64(HEADR / 2)
+		}
+	}
 
 	if *FlagDataAddr != -1 && *FlagDataAddr%*FlagRound != 0 {
 		Exitf("invalid -D value 0x%x: not aligned to rounding quantum 0x%x", *FlagDataAddr, *FlagRound)

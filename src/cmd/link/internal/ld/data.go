@@ -719,7 +719,7 @@ func extreloc(ctxt *Link, ldr *loader.Loader, s loader.Sym, r loader.Reloc) (loa
 			rr.Xsym = rs
 			break
 		}
-		if rs != 0 && (ldr.SymSect(rs) != ldr.SymSect(s) || rt == objabi.R_GOTPCREL) {
+		if rs != 0 && (ldr.SymSect(rs) != ldr.SymSect(s) || rt == objabi.R_GOTPCREL || (*flagEmitRelocs && !target.IsExternal())) {
 			// set up addend for eventual relocation via outer symbol.
 			rs := rs
 			rs, off := FoldSubSymbolOffset(ldr, rs)
@@ -771,6 +771,58 @@ func ExtrelocViaOuterSym(ldr *loader.Loader, r loader.Reloc, s loader.Sym) loade
 	rr.Type = r.Type()
 	rr.Size = r.Siz()
 	return rr
+}
+
+func countRelocsForSyms(ctxt *Link, ldr *loader.Loader, sect *sym.Section, syms []loader.Sym) {
+	// Skip NOBITS sections (e.g. .bss) to match the guard in elfrelocsect.
+	if sect.Vaddr >= sect.Seg.Vaddr+sect.Seg.Filelen {
+		sect.Relcount = 0
+		return
+	}
+	if sect.Name == ".shstrtab" {
+		sect.Relcount = 0
+		return
+	}
+	var count uint32
+	for _, s := range syms {
+		if !ldr.AttrReachable(s) {
+			continue
+		}
+		if uint64(ldr.SymValue(s)) < sect.Vaddr {
+			continue
+		}
+		if ldr.SymValue(s) >= int64(sect.Vaddr+sect.Length) {
+			break
+		}
+		relocs := ldr.Relocs(s)
+		for ri := 0; ri < relocs.Count(); ri++ {
+			r := relocs.At(ri)
+			siz := int32(r.Siz())
+			if siz == 0 {
+				continue
+			}
+			rt := r.Type()
+			if rt >= objabi.ElfRelocOffset {
+				continue
+			}
+			rr, ok := extreloc(ctxt, ldr, s, r)
+			if !ok {
+				continue
+			}
+			if rr.Xsym == 0 {
+				continue
+			}
+			if ElfSymForReloc(ctxt, rr.Xsym) == 0 {
+				continue
+			}
+			n := 1
+			if thearch.ELF.RelocN != nil {
+				n = thearch.ELF.RelocN(rr)
+			}
+			count += uint32(n)
+		}
+	}
+	sect.Relcount = count
 }
 
 // relocSymState hold state information needed when making a series of
