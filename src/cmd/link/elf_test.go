@@ -686,6 +686,397 @@ func TestELFHeadersSorted(t *testing.T) {
 	}
 }
 
+func getKeys(m map[string][]elfRelocEntry) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+type elfRelocEntry struct {
+	Offset  uint64
+	SymIdx  uint32
+	Type    uint32
+	Addend  int64
+	SymName string
+}
+
+func readELFRelocations(t *testing.T, exe string) map[string][]elfRelocEntry {
+	f, err := elf.Open(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	symbols, err := f.Symbols()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	symMap := make(map[uint32]string)
+	for idx, s := range symbols {
+		if s.Name != "" {
+			symMap[uint32(idx)] = s.Name
+		}
+	}
+
+	relocs := make(map[string][]elfRelocEntry)
+
+	for _, sec := range f.Sections {
+		if sec.Type != elf.SHT_RELA && sec.Type != elf.SHT_REL {
+			continue
+		}
+
+		if sec.Type == elf.SHT_RELA && sec.Entsize != 24 {
+			t.Errorf("section %s: expected entry size 24 for Rela64, got %d", sec.Name, sec.Entsize)
+		}
+		if sec.Type == elf.SHT_REL && sec.Entsize != 12 && sec.Entsize != 16 {
+			t.Errorf("section %s: expected entry size 12 or 16 for Rel, got %d", sec.Name, sec.Entsize)
+		}
+
+		data, err := sec.Data()
+		if err != nil {
+			t.Fatalf("reading section %s: %v", sec.Name, err)
+		}
+
+		switch sec.Type {
+		case elf.SHT_RELA:
+			for i := 0; i < len(data); i += 24 {
+				if i+24 > len(data) {
+					break
+				}
+				var r elf.Rela64
+				r.Off = f.ByteOrder.Uint64(data[i : i+8])
+				info := f.ByteOrder.Uint64(data[i+8 : i+16])
+				r.Addend = int64(f.ByteOrder.Uint64(data[i+16 : i+24]))
+				r.Info = info
+
+				entry := elfRelocEntry{
+					Offset: r.Off,
+					SymIdx: elf.R_SYM64(info),
+					Type:   elf.R_TYPE64(info),
+					Addend: r.Addend,
+				}
+				if name, ok := symMap[entry.SymIdx]; ok {
+					entry.SymName = name
+				}
+				relocs[sec.Name] = append(relocs[sec.Name], entry)
+			}
+		case elf.SHT_REL:
+			if f.Class == elf.ELFCLASS64 {
+				for i := 0; i < len(data); i += 16 {
+					if i+16 > len(data) {
+						break
+					}
+					var r elf.Rel64
+					r.Off = f.ByteOrder.Uint64(data[i : i+8])
+					info := f.ByteOrder.Uint64(data[i+8 : i+16])
+					r.Info = info
+
+					entry := elfRelocEntry{
+						Offset: r.Off,
+						SymIdx: elf.R_SYM64(info),
+						Type:   elf.R_TYPE64(info),
+						Addend: 0,
+					}
+					if name, ok := symMap[entry.SymIdx]; ok {
+						entry.SymName = name
+					}
+					relocs[sec.Name] = append(relocs[sec.Name], entry)
+				}
+			} else {
+				for i := 0; i < len(data); i += 8 {
+					if i+8 > len(data) {
+						break
+					}
+					var r elf.Rel32
+					r.Off = f.ByteOrder.Uint32(data[i : i+4])
+					info := f.ByteOrder.Uint32(data[i+4 : i+8])
+					r.Info = info
+
+					entry := elfRelocEntry{
+						Offset: uint64(r.Off),
+						SymIdx: elf.R_SYM32(info),
+						Type:   elf.R_TYPE32(info),
+						Addend: 0,
+					}
+					if name, ok := symMap[entry.SymIdx]; ok {
+						entry.SymName = name
+					}
+					relocs[sec.Name] = append(relocs[sec.Name], entry)
+				}
+			}
+		}
+	}
+
+	return relocs
+}
+
+func TestEmitRelocs(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	testenv.MustHaveCGO(t)
+	t.Parallel()
+
+	tmpdir := t.TempDir()
+	src := filepath.Join(tmpdir, "hello.go")
+	srcContent := `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello")
+}
+`
+	if err := os.WriteFile(src, []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	exe := filepath.Join(tmpdir, "hello")
+	cmd := goCmd(t, "build", "-ldflags=-emit-relocs", "-o", exe, src)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v, output:\n%s", err, out)
+	}
+
+	relocs := readELFRelocations(t, exe)
+
+	textRelocs, ok := relocs[".rela.text"]
+	if !ok {
+		t.Fatalf("expected .rela.text section to exist, got sections: %v", getKeys(relocs))
+	}
+
+	if len(textRelocs) == 0 {
+		t.Errorf("expected .rela.text to have relocation entries, got none")
+	}
+}
+
+func buildEmitRelocsBinary(t *testing.T, srcContent string) (string, map[string][]elfRelocEntry) {
+	t.Helper()
+	return buildEmitRelocsBinaryWithBuildMode(t, srcContent, "")
+}
+
+func buildEmitRelocsBinaryWithBuildMode(t *testing.T, srcContent string, buildmode string) (string, map[string][]elfRelocEntry) {
+	t.Helper()
+	testenv.MustHaveGoBuild(t)
+	testenv.MustHaveCGO(t)
+
+	tmpdir := t.TempDir()
+	ext := ".go"
+	src := filepath.Join(tmpdir, "hello"+ext)
+	if err := os.WriteFile(src, []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	exe := filepath.Join(tmpdir, "hello")
+	args := []string{"build", "-ldflags=-emit-relocs"}
+	if buildmode != "" {
+		args = append(args, "-buildmode="+buildmode)
+	}
+	args = append(args, "-o", exe, src)
+	cmd := goCmd(t, args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v, output:\n%s", err, out)
+	}
+
+	relocs := readELFRelocations(t, exe)
+	return exe, relocs
+}
+
+func TestEmitRelocsBuildModes(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	testenv.MustHaveCGO(t)
+	t.Parallel()
+
+	helloSrc := `package main
+
+import "fmt"
+
+var globalVar = 42
+
+func main() {
+	fmt.Println(globalVar)
+}
+`
+
+	verifyRelocStructure := func(t *testing.T, exe string) {
+		t.Helper()
+		f, err := elf.Open(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+
+		symtabIdx := uint32(0)
+		for i, sec := range f.Sections {
+			if sec.Name == ".symtab" {
+				symtabIdx = uint32(i)
+				break
+			}
+		}
+		if symtabIdx == 0 {
+			t.Fatal("no .symtab section found")
+		}
+
+		entSize := uint64(24)
+		if f.Class == elf.ELFCLASS32 {
+			entSize = 8
+		}
+
+		for _, sec := range f.Sections {
+			if sec.Type != elf.SHT_RELA && sec.Type != elf.SHT_REL {
+				continue
+			}
+			if sec.Flags&elf.SHF_ALLOC != 0 {
+				continue
+			}
+			if sec.Link != symtabIdx {
+				t.Errorf("%s: sh_link=%d, want %d (.symtab)", sec.Name, sec.Link, symtabIdx)
+			}
+			if sec.Entsize != entSize {
+				t.Errorf("%s: entsize=%d, want %d", sec.Name, sec.Entsize, entSize)
+			}
+			if sec.Size > 0 && sec.Entsize > 0 && sec.Size%sec.Entsize != 0 {
+				t.Errorf("%s: size %d is not a multiple of entsize %d", sec.Name, sec.Size, sec.Entsize)
+			}
+			if sec.Info > 0 && int(sec.Info) < len(f.Sections) {
+				target := f.Sections[sec.Info]
+				if target.Type == elf.SHT_NOBITS {
+					t.Errorf("%s: targets NOBITS section %s", sec.Name, target.Name)
+				}
+			}
+		}
+	}
+
+	verifyRelocContent := func(t *testing.T, relocs map[string][]elfRelocEntry) {
+		t.Helper()
+		textRelocs, ok := relocs[".rela.text"]
+		if !ok {
+			t.Fatalf("expected .rela.text section, got sections: %v", getKeys(relocs))
+		}
+		if len(textRelocs) == 0 {
+			t.Error("expected .rela.text to have relocation entries")
+		}
+
+		for _, name := range []string{".rela.noptrdata", ".rela.data", ".rela.rodata"} {
+			if entries, ok := relocs[name]; ok && len(entries) == 0 {
+				t.Errorf("%s exists but has no entries", name)
+			}
+		}
+	}
+
+	t.Run("exe", func(t *testing.T) {
+		t.Parallel()
+		exe, relocs := buildEmitRelocsBinaryWithBuildMode(t, helloSrc, "exe")
+		verifyRelocStructure(t, exe)
+		verifyRelocContent(t, relocs)
+	})
+
+	t.Run("pie", func(t *testing.T) {
+		testenv.MustHaveBuildMode(t, "pie")
+		t.Parallel()
+		exe, relocs := buildEmitRelocsBinaryWithBuildMode(t, helloSrc, "pie")
+		verifyRelocStructure(t, exe)
+		verifyRelocContent(t, relocs)
+
+		f, err := elf.Open(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if f.Type != elf.ET_DYN {
+			t.Errorf("expected ET_DYN for PIE, got %v", f.Type)
+		}
+	})
+}
+
+func TestEmitRelocsTargetSectionTypes(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	testenv.MustHaveCGO(t)
+	t.Parallel()
+
+	tmpdir := t.TempDir()
+	src := filepath.Join(tmpdir, "hello.go")
+	srcContent := `package main
+
+import "fmt"
+
+var globalVar = 42
+
+func main() {
+	fmt.Println(globalVar)
+}
+`
+	if err := os.WriteFile(src, []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, buildmode := range []string{"exe", "pie"} {
+		t.Run(buildmode, func(t *testing.T) {
+			if buildmode == "pie" {
+				testenv.MustHaveBuildMode(t, "pie")
+			}
+			t.Parallel()
+
+			exe := filepath.Join(tmpdir, "hello_"+buildmode)
+			args := []string{"build", "-ldflags=-emit-relocs"}
+			if buildmode != "" {
+				args = append(args, "-buildmode="+buildmode)
+			}
+			args = append(args, "-o", exe, src)
+			cmd := goCmd(t, args...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("build failed: %v, output:\n%s", err, out)
+			}
+
+			f, err := elf.Open(exe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+
+			for _, sec := range f.Sections {
+				if sec.Type != elf.SHT_RELA && sec.Type != elf.SHT_REL {
+					continue
+				}
+				if sec.Flags&elf.SHF_ALLOC != 0 {
+					continue
+				}
+				if sec.Info == 0 || int(sec.Info) >= len(f.Sections) {
+					continue
+				}
+				target := f.Sections[sec.Info]
+				if target.Type != elf.SHT_PROGBITS {
+					t.Errorf("relocation section %s targets %s (type %v, want SHT_PROGBITS)",
+						sec.Name, target.Name, target.Type)
+				}
+			}
+		})
+	}
+}
+
+func TestEmitRelocsStripFlags(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	t.Parallel()
+
+	tmpdir := t.TempDir()
+	src := filepath.Join(tmpdir, "hello.go")
+	if err := os.WriteFile(src, []byte("package main\nfunc main() {}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(tmpdir, "hello")
+
+	t.Run("StripSymbols", func(t *testing.T) {
+		cmd := goCmd(t, "build", "-ldflags=-emit-relocs -s", "-o", exe, src)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatal("expected build to fail with -emit-relocs -s")
+		}
+		if !strings.Contains(string(out), "-emit-relocs") {
+			t.Errorf("expected error about -emit-relocs, got:\n%s", out)
+		}
+	})
+}
+
 func testELFHeadersSorted(t *testing.T, buildmode string) {
 	testenv.MustHaveGoBuild(t)
 
