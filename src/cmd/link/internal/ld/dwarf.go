@@ -2289,11 +2289,13 @@ func dwarfcompress(ctxt *Link) {
 			sect.Align = int32(ctxt.Arch.Alignment)
 			sect.Length = uint64(len(z.compressed))
 			sect.Compressed = true
+			sect.Relcount = 0
 			newSym := ldr.MakeSymbolBuilder(compressedSegName)
-			ldr.SetAttrReachable(s, true)
+			ldr.SetAttrReachable(newSym.Sym(), true)
 			newSym.SetData(z.compressed)
 			newSym.SetSize(int64(len(z.compressed)))
 			ldr.SetSymSect(newSym.Sym(), sect)
+			sect.Sym = newSym.Sym()
 			ds := dwarfSecInfo{syms: []loader.Sym{newSym.Sym()}}
 			newDwarfp = append(newDwarfp, ds)
 
