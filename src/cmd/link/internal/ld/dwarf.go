@@ -2216,7 +2216,7 @@ func dwarfaddshstrings(ctxt *Link, add func(string)) {
 	secs := []string{"abbrev", "frame", "info", "loc", "line", "gdb_scripts", "ranges"}
 	for _, sec := range secs {
 		add(".debug_" + sec)
-		if ctxt.IsExternal() {
+		if ctxt.IsExternal() || *flagEmitRelocs {
 			add(elfRelType + ".debug_" + sec)
 		}
 	}

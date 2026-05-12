@@ -476,6 +476,20 @@ func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loade
 	return false
 }
 
+func elfRelocN(r loader.ExtReloc) int {
+	switch r.Type {
+	case objabi.R_ADDRARM64,
+		objabi.R_ARM64_PCREL_LDST8,
+		objabi.R_ARM64_PCREL_LDST16,
+		objabi.R_ARM64_PCREL_LDST32,
+		objabi.R_ARM64_PCREL_LDST64,
+		objabi.R_ARM64_TLS_IE,
+		objabi.R_ARM64_GOTPCREL:
+		return 2
+	}
+	return 1
+}
+
 func elfreloc1(ctxt *ld.Link, out *ld.OutBuf, ldr *loader.Loader, s loader.Sym, r loader.ExtReloc, ri int, sectoff int64) bool {
 	out.Write64(uint64(sectoff))
 

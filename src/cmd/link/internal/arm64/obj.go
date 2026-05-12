@@ -72,6 +72,7 @@ func Init() (*sys.Arch, ld.Arch) {
 
 			Reloc1:    elfreloc1,
 			RelocSize: 24,
+			RelocN:    elfRelocN,
 			SetupPLT:  elfsetupplt,
 		},
 	}

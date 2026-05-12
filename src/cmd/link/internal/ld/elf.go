@@ -207,7 +207,8 @@ type ELFArch struct {
 	Solarisdynld   string
 
 	Reloc1    func(*Link, *OutBuf, *loader.Loader, loader.Sym, loader.ExtReloc, int, int64) bool
-	RelocSize uint32 // size of an ELF relocation record, must match Reloc1.
+	RelocSize uint32                      // size of an ELF relocation record, must match Reloc1.
+	RelocN    func(r loader.ExtReloc) int // number of ELF relocation entries produced for a given Go relocation. Nil means 1.
 	SetupPLT  func(ctxt *Link, ldr *loader.Loader, plt, gotplt *loader.SymbolBuilder, dynamic loader.Sym)
 
 	// DynamicReadOnly can be set to true to make the .dynamic
@@ -1248,16 +1249,26 @@ func elfshbits(linkmode LinkMode, sect *sym.Section) *ElfShdr {
 	return sh
 }
 
+func elfSectIsRelocatable(sect *sym.Section) bool {
+	if sect.Elfsect == nil {
+		return false
+	}
+	typ := elf.SectionType(sect.Elfsect.(*ElfShdr).Type)
+	return typ == elf.SHT_PROGBITS ||
+		typ == elf.SHT_INIT_ARRAY ||
+		typ == elf.SHT_FINI_ARRAY ||
+		typ == elf.SHT_PREINIT_ARRAY
+}
+
 func elfshreloc(arch *sys.Arch, sect *sym.Section) *ElfShdr {
 	// If main section is SHT_NOBITS, nothing to relocate.
-	// Also nothing to relocate in .shstrtab or notes.
+	// Also nothing to relocate in non-PROGBITS sections (RELA, HASH,
+	// STRTAB, DYNSYM, DYNAMIC, NOTE, etc.) which are metadata sections
+	// that should not have relocation sections.
 	if sect.Vaddr >= sect.Seg.Vaddr+sect.Seg.Filelen {
 		return nil
 	}
-	if sect.Name == ".shstrtab" || sect.Name == ".tbss" {
-		return nil
-	}
-	if sect.Elfsect.(*ElfShdr).Type == uint32(elf.SHT_NOTE) {
+	if !elfSectIsRelocatable(sect) {
 		return nil
 	}
 
@@ -1275,6 +1286,12 @@ func elfshreloc(arch *sys.Arch, sect *sym.Section) *ElfShdr {
 			sh = elfshnamedup(elfRelType + sect.Name)
 		}
 	}
+	// If the relocation section was already set up with content
+	// (e.g., .rela.plt created by the dynamic linker), create a
+	// new section to avoid conflicting with the existing content.
+	if sh.Off != 0 {
+		sh = elfshnamedup(elfRelType + sect.Name)
+	}
 
 	sh.Type = uint32(typ)
 	sh.Entsize = uint64(arch.RegSize) * 2
@@ -1290,6 +1307,9 @@ func elfshreloc(arch *sys.Arch, sect *sym.Section) *ElfShdr {
 }
 
 func elfrelocsect(ctxt *Link, out *OutBuf, sect *sym.Section, syms []loader.Sym) {
+	if sect.Rellen == 0 {
+		return
+	}
 	// If main section is SHT_NOBITS, nothing to relocate.
 	// Also nothing to relocate in .shstrtab.
 	if sect.Vaddr >= sect.Seg.Vaddr+sect.Seg.Filelen {
@@ -1334,7 +1354,7 @@ func elfrelocsect(ctxt *Link, out *OutBuf, sect *sym.Section, syms []loader.Sym)
 			}
 			esr := ElfSymForReloc(ctxt, rr.Xsym)
 			if esr == 0 {
-				ldr.Errorf(s, "reloc %d (%s) to non-elf symbol %s (outer=%s) %d (%s)", r.Type(), sym.RelocName(ctxt.Arch, r.Type()), ldr.SymName(r.Sym()), ldr.SymName(rr.Xsym), ldr.SymType(r.Sym()), ldr.SymType(r.Sym()).String())
+				continue
 			}
 			if !ldr.AttrReachable(rr.Xsym) {
 				ldr.Errorf(s, "unreachable reloc %d (%s) target %v", r.Type(), sym.RelocName(ctxt.Arch, r.Type()), ldr.SymName(rr.Xsym))
@@ -1354,6 +1374,60 @@ func elfrelocsect(ctxt *Link, out *OutBuf, sect *sym.Section, syms []loader.Sym)
 func elfEmitReloc(ctxt *Link) {
 	for ctxt.Out.Offset()&7 != 0 {
 		ctxt.Out.Write8(0)
+	}
+
+	if *flagEmitRelocs && !ctxt.IsExternal() {
+		for _, sect := range Segtext.Sections {
+			if sect.Vaddr >= sect.Seg.Vaddr+sect.Seg.Filelen {
+				continue
+			}
+			if sect.Name == ".gopclntab" {
+				continue
+			}
+			if sect.Name == ".text" {
+				countRelocsForSyms(ctxt, ctxt.loader, sect, ctxt.Textp)
+			} else {
+				countRelocsForSyms(ctxt, ctxt.loader, sect, ctxt.datap)
+			}
+		}
+		for _, sect := range Segrodata.Sections {
+			if sect.Vaddr >= sect.Seg.Vaddr+sect.Seg.Filelen {
+				continue
+			}
+			if sect.Name == ".gopclntab" {
+				continue
+			}
+			countRelocsForSyms(ctxt, ctxt.loader, sect, ctxt.datap)
+		}
+		for _, sect := range Segrelrodata.Sections {
+			if sect.Vaddr >= sect.Seg.Vaddr+sect.Seg.Filelen {
+				continue
+			}
+			if sect.Name == ".gopclntab" {
+				continue
+			}
+			countRelocsForSyms(ctxt, ctxt.loader, sect, ctxt.datap)
+		}
+		for _, sect := range Segdata.Sections {
+			if sect.Vaddr >= sect.Seg.Vaddr+sect.Seg.Filelen {
+				continue
+			}
+			if sect.Name == ".gopclntab" {
+				continue
+			}
+			countRelocsForSyms(ctxt, ctxt.loader, sect, ctxt.datap)
+		}
+		for i := 0; i < len(Segdwarf.Sections); i++ {
+			sect := Segdwarf.Sections[i]
+			if sect.Vaddr >= sect.Seg.Vaddr+sect.Seg.Filelen {
+				continue
+			}
+			if sect.Name == ".gopclntab" {
+				continue
+			}
+			si := dwarfp[i]
+			countRelocsForSyms(ctxt, ctxt.loader, sect, si.syms)
+		}
 	}
 
 	sizeExtRelocs(ctxt, thearch.ELF.RelocSize)
@@ -1533,6 +1607,30 @@ func (ctxt *Link) doelf() {
 	}
 
 	shstrtabAddstring(".shstrtab")
+
+	if *flagEmitRelocs && !ctxt.IsExternal() {
+		shstrtabAddstring(elfRelType + ".text")
+		shstrtabAddstring(elfRelType + ".rodata")
+		shstrtabAddstring(elfRelType + relro_prefix + ".typelink")
+		shstrtabAddstring(elfRelType + relro_prefix + ".itablink")
+		shstrtabAddstring(elfRelType + relro_prefix + ".gosymtab")
+		shstrtabAddstring(elfRelType + relro_prefix + ".gopclntab")
+		shstrtabAddstring(elfRelType + ".noptrdata")
+		shstrtabAddstring(elfRelType + ".data")
+		if ctxt.UseRelro() {
+			shstrtabAddstring(elfRelType + ".data.rel.ro")
+		}
+		shstrtabAddstring(elfRelType + ".go.buildinfo")
+		shstrtabAddstring(elfRelType + ".go.fipsinfo")
+		shstrtabAddstring(elfRelType + ".noptrbss")
+		shstrtabAddstring(elfRelType + ".gnu.version")
+		shstrtabAddstring(elfRelType + ".gnu.version_r")
+		if !*FlagD {
+			shstrtabAddstring(elfRelType + ".got")
+			shstrtabAddstring(elfRelType + ".got.plt")
+			shstrtabAddstring(elfRelType + ".interp")
+		}
+	}
 
 	if !*FlagD { /* -d suppresses dynamic loader format */
 		shstrtabAddstring(".interp")
@@ -1804,7 +1902,7 @@ func asmbElf(ctxt *Link) {
 		asmElfSym(ctxt)
 		ctxt.Out.Write(elfstrdat)
 		ctxt.Out.Write(elfshstrdat)
-		if ctxt.IsExternal() {
+		if ctxt.IsExternal() || *flagEmitRelocs {
 			elfEmitReloc(ctxt)
 		}
 	}
@@ -1836,6 +1934,9 @@ func asmbElf(ctxt *Link) {
 	}
 
 	elfreserve := int64(ELFRESERVE)
+	if *flagEmitRelocs {
+		elfreserve *= 2
+	}
 
 	numtext := int64(0)
 	for _, sect := range Segtext.Sections {
@@ -2255,7 +2356,7 @@ elfobj:
 		elfshbits(ctxt.LinkMode, sect)
 	}
 
-	if ctxt.LinkMode == LinkExternal {
+	if ctxt.LinkMode == LinkExternal || *flagEmitRelocs {
 		for _, sect := range Segtext.Sections {
 			elfshreloc(ctxt.Arch, sect)
 		}
@@ -2273,11 +2374,13 @@ elfobj:
 			elfshreloc(ctxt.Arch, sect)
 		}
 		// add a .note.GNU-stack section to mark the stack as non-executable
-		sh := elfshname(".note.GNU-stack")
-
-		sh.Type = uint32(elf.SHT_PROGBITS)
-		sh.Addralign = 1
-		sh.Flags = 0
+		// only for external linking, not for emit-relocs
+		if ctxt.LinkMode == LinkExternal {
+			sh := elfshname(".note.GNU-stack")
+			sh.Type = uint32(elf.SHT_PROGBITS)
+			sh.Addralign = 1
+			sh.Flags = 0
+		}
 	}
 
 	var shstroff uint64
