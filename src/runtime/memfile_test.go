@@ -160,8 +160,8 @@ func TestNoscanFileRegionSetup(t *testing.T) {
 	if fd < 0 {
 		t.Fatalf("setup returned bad fd %d", fd)
 	}
-	if regionSize != size {
-		t.Fatalf("region size = %d, want %d", regionSize, size)
+	if regionSize < size {
+		t.Fatalf("region size = %d, want >= %d", regionSize, size)
 	}
 
 	// Write known bytes at the first and last offset through the region.
@@ -187,13 +187,97 @@ func TestNoscanFileRegionSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if len(data) != size {
-		t.Fatalf("file size = %d, want %d", len(data), size)
+	if len(data) != int(regionSize) {
+		t.Fatalf("file size = %d, want %d", len(data), regionSize)
 	}
 	if data[0] != 0x11 {
 		t.Fatalf("data[0] = %#x, want 0x11", data[0])
 	}
-	if data[size-1] != 0x22 {
-		t.Fatalf("data[size-1] = %#x, want 0x22", data[size-1])
+	if data[regionSize-1] != 0x22 {
+		t.Fatalf("data[regionSize-1] = %#x, want 0x22", data[regionSize-1])
 	}
+}
+
+// TestNoscanFileRegionArenaRegistered verifies that setup registers heapArena
+// metadata for the region so that the arena-index machinery resolves the
+// region's addresses.
+func TestNoscanFileRegionArenaRegistered(t *testing.T) {
+	const size = 1 << 20 // 1 MiB
+
+	dir, err := os.MkdirTemp("", "noscanarena")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	path := dir + "/backing.bin"
+
+	base, _, regionSize, errmsg := runtime.NoscanFileRegionSetupForTest(path, size)
+	if errmsg != "" {
+		t.Fatalf("setup failed: %s", errmsg)
+	}
+	baseAddr := uintptr(base)
+
+	// First and last page of the region must resolve to a registered arena.
+	if !runtime.NoscanFileRegionArenaRegistered(baseAddr) {
+		t.Errorf("base %x not registered as an arena", baseAddr)
+	}
+	if !runtime.NoscanFileRegionArenaRegistered(baseAddr + regionSize - 1) {
+		t.Errorf("last byte %x not registered as an arena", baseAddr+regionSize-1)
+	}
+
+	// An address well outside the region (a low address) must not be reported
+	// as registered by our region.
+	if runtime.NoscanFileRegionArenaRegistered(0x1000) {
+		t.Errorf("address 0x1000 unexpectedly registered")
+	}
+}
+
+// TestNoscanFileRegionPageAllocRoundTrip verifies the region's dedicated page
+// allocator can hand pages out and take them back, and that allocation still
+// works after a free (proving the bookkeeping stays consistent).
+func TestNoscanFileRegionPageAllocRoundTrip(t *testing.T) {
+	const size = 1 << 20 // 1 MiB
+
+	dir, err := os.MkdirTemp("", "noscanpagealloc")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	path := dir + "/backing.bin"
+
+	base, _, regionSize, errmsg := runtime.NoscanFileRegionSetupForTest(path, size)
+	if errmsg != "" {
+		t.Fatalf("setup failed: %s", errmsg)
+	}
+	lo := uintptr(base)
+	hi := lo + regionSize
+
+	inRange := func(x uintptr, what string) {
+		if x < lo || x >= hi {
+			t.Fatalf("%s = %x not in region [%x, %x)", what, x, lo, hi)
+		}
+	}
+
+	// Allocate two disjoint runs of pages.
+	a, ok := runtime.NoscanFileRegionAllocPages(4)
+	if !ok {
+		t.Fatal("first alloc failed")
+	}
+	inRange(a, "first alloc")
+	b, ok := runtime.NoscanFileRegionAllocPages(4)
+	if !ok {
+		t.Fatal("second alloc failed")
+	}
+	inRange(b, "second alloc")
+	if !(b >= a+4*runtime.PageSize || a >= b+4*runtime.PageSize) {
+		t.Fatalf("allocs overlap: a=%x b=%x", a, b)
+	}
+
+	// Free the first and allocate again; it must still succeed and stay in range.
+	runtime.NoscanFileRegionFreePages(a, 4)
+	c, ok := runtime.NoscanFileRegionAllocPages(4)
+	if !ok {
+		t.Fatal("alloc after free failed")
+	}
+	inRange(c, "alloc after free")
 }

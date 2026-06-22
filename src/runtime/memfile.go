@@ -10,7 +10,11 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/goarch"
+	"internal/runtime/atomic"
+	"unsafe"
+)
 
 // ftruncate calls the ftruncate system call. It is implemented in assembly.
 // It returns 0 on success or a negative errno on failure.
@@ -26,13 +30,29 @@ func ftruncate(fd int32, length int64) int32
 type noscanFileRegion struct {
 	// base is the first byte of the region; [base, base+size) is owned.
 	base uintptr
-	// size is the length of the region in bytes (a multiple of pageSize).
+	// size is the length of the region in bytes (a multiple of pallocChunkBytes).
 	size uintptr
 	// fd is the backing file descriptor, kept open for the life of the region.
 	fd int32
 	// enabled reports whether the region is mapped and ready to serve spans.
 	enabled bool
+
+	// lock guards pages, the dedicated page allocator for this region. It is
+	// also passed to pages.init as the page allocator's mheapLock.
+	lock mutex
+	// pages manages free/used pages within [base, base+size). It is a separate
+	// instance from mheap_.pages so the global scavenger never touches the
+	// file-backed region.
+	pages pageAlloc
+	// arenas lists the arena indices registered for this region, so they can be
+	// referenced or excluded (e.g. from scavenging) later.
+	arenas []arenaIdx
 }
+
+// fileRegion is the process-wide file-backed noscan region, or nil if the
+// feature is disabled. It is assigned during early initialization (see
+// noscanFileRegionInit) and read-only thereafter.
+var fileRegion *noscanFileRegion
 
 // setup reserves an arena-aligned region, creates (or opens) the backing file
 // at path, sizes it to size, and overlays a MAP_SHARED file mapping over the
@@ -42,11 +62,11 @@ type noscanFileRegion struct {
 // On failure it returns a non-empty diagnostic message and leaves the region
 // disabled, releasing any partial resources it acquired.
 //
-// size is rounded up to a multiple of pageSize. The base is aligned to
+// size is rounded up to a multiple of pallocChunkBytes. The base is aligned to
 // heapArenaBytes so that the region can later be registered as heap arenas
 // (see registerArenas).
 func (r *noscanFileRegion) setup(path string, size uintptr) string {
-	size = alignUp(size, pageSize)
+	size = alignUp(size, pallocChunkBytes)
 	if size == 0 {
 		return "noscan file region: zero size"
 	}
@@ -92,7 +112,71 @@ func (r *noscanFileRegion) setup(path string, size uintptr) string {
 	r.size = size
 	r.fd = fd
 	r.enabled = true
+
+	// Set up the dedicated page allocator over the region and register the
+	// region's arenas so that spanOf / pageIndexOf (and thus the GC) can
+	// resolve addresses in [base, base+size).
+	r.pages.init(&r.lock, &memstats.gcMiscSys, false)
+	r.registerArenas()
+	lock(&r.lock)
+	r.pages.grow(r.base, r.size)
+	unlock(&r.lock)
+
 	return ""
+}
+
+// registerArenas creates heapArena metadata for every arena overlapping the
+// region and publishes it into the global arenas map, mirroring mheap.sysAlloc.
+// After this, spanOf and pageIndexOf resolve addresses inside the region.
+//
+// Region addresses are disjoint from the regular heap's, so the arena slots
+// written here do not collide with the heap's slots; stores use atomic writes
+// to stay safe against concurrent lockless spanOf readers.
+func (r *noscanFileRegion) registerArenas() {
+	for ri := arenaIndex(r.base); ri <= arenaIndex(r.base+r.size-1); ri++ {
+		l2 := mheap_.arenas[ri.l1()]
+		if l2 == nil {
+			l2 = (*[1 << arenaL2Bits]*heapArena)(sysAllocOS(unsafe.Sizeof(*l2)))
+			if l2 == nil {
+				throw("noscan file region: out of memory allocating arena map")
+			}
+			atomic.StorepNoWB(unsafe.Pointer(&mheap_.arenas[ri.l1()]), unsafe.Pointer(l2))
+		}
+		if l2[ri.l2()] != nil {
+			throw("noscan file region: arena already initialized")
+		}
+		ha := (*heapArena)(persistentalloc(unsafe.Sizeof(heapArena{}), goarch.PtrSize, &memstats.gcMiscSys))
+		if ha == nil {
+			throw("noscan file region: out of memory allocating heap arena metadata")
+		}
+		atomic.StorepNoWB(unsafe.Pointer(&l2[ri.l2()]), unsafe.Pointer(ha))
+		r.arenas = append(r.arenas, ri)
+	}
+}
+
+// allocPages returns the base address of npages contiguous free pages in the
+// region, or (0, false) if the region is exhausted.
+//
+// pageAlloc.alloc is go:systemstack, so the call is dispatched there.
+func (r *noscanFileRegion) allocPages(npages uintptr) (uintptr, bool) {
+	var base uintptr
+	systemstack(func() {
+		lock(&r.lock)
+		base, _ = r.pages.alloc(npages)
+		unlock(&r.lock)
+	})
+	return base, base != 0
+}
+
+// freePages returns npages starting at base to the region's page allocator.
+//
+// pageAlloc.free is go:systemstack, so the call is dispatched there.
+func (r *noscanFileRegion) freePages(base, npages uintptr) {
+	systemstack(func() {
+		lock(&r.lock)
+		r.pages.free(base, npages)
+		unlock(&r.lock)
+	})
 }
 
 // noscanFileConfig holds the parsed GONOSCANFILE configuration.

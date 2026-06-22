@@ -19,13 +19,40 @@ func NoscanFileConfigFromEnv(path, sizeStr string) (p string, size uintptr, ok b
 	return c.path, c.size, c.ok
 }
 
+// NoscanFileRegionSetupForTest creates a region, backs it with file at path,
+// stores it as the process-wide fileRegion, and returns its base, fd, and size.
 func NoscanFileRegionSetupForTest(path string, size uintptr) (base unsafe.Pointer, fd int32, regionSize uintptr, errmsg string) {
-	var r noscanFileRegion
+	r := new(noscanFileRegion)
 	errmsg = r.setup(path, size)
 	if errmsg != "" {
 		return nil, -1, 0, errmsg
 	}
+	fileRegion = r
 	return unsafe.Pointer(r.base), r.fd, r.size, ""
+}
+
+// NoscanFileRegionArenaRegistered reports whether the arena containing addr has
+// been registered by the file region.
+func NoscanFileRegionArenaRegistered(addr uintptr) bool {
+	ri := arenaIndex(addr)
+	l2 := mheap_.arenas[ri.l1()]
+	if l2 == nil {
+		return false
+	}
+	return l2[ri.l2()] != nil
+}
+
+func NoscanFileRegionAllocPages(npages uintptr) (uintptr, bool) {
+	if fileRegion == nil {
+		return 0, false
+	}
+	return fileRegion.allocPages(npages)
+}
+
+func NoscanFileRegionFreePages(base, npages uintptr) {
+	if fileRegion != nil {
+		fileRegion.freePages(base, npages)
+	}
 }
 
 const (
