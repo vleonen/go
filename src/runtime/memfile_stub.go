@@ -17,3 +17,5 @@ func noscanFileRegionAlloc(npages uintptr, spanclass spanClass) *mspan { return 
 func isFileRegionAddr(addr uintptr) bool { return false }
 
 func noscanFileRegionFreeLocked(s *mspan, typ spanAllocType) {}
+
+func noscanFileRegionInit() {}

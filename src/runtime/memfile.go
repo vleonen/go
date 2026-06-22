@@ -306,6 +306,25 @@ func parseNoscanFileConfig() noscanFileConfig {
 	return noscanFileConfigFromEnv(gogetenv("GONOSCANFILE"), gogetenv("GONOSCANFILESIZE"))
 }
 
+// noscanFileRegionInit sets up the file-backed noscan region at startup, if
+// GONOSCANFILE and GONOSCANFILESIZE request it. It must run after the
+// environment is parsed and after gcinit (the region's page allocator touches
+// gcController), and while the world is stopped (registerArenas publishes into
+// the arenas map). On failure it prints a diagnostic and leaves the feature
+// disabled, so large noscan allocations fall back to the regular heap.
+func noscanFileRegionInit() {
+	cfg := parseNoscanFileConfig()
+	if !cfg.ok {
+		return
+	}
+	r := new(noscanFileRegion)
+	if msg := r.setup(cfg.path, cfg.size); msg != "" {
+		print("runtime: ", msg, "\n")
+		return
+	}
+	setFileRegion(r)
+}
+
 // noscanFileConfigFromEnv derives the configuration from the path and sizeStr
 // values (typically obtained from the environment). It is split out so that
 // the parsing logic can be tested without manipulating the process

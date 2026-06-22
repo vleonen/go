@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"runtime"
+	"runtime/debug"
 )
 
 // TestMapSharedFilePrimitive validates the low-level primitives that the
@@ -441,6 +442,49 @@ func TestLargeNoscanExhaustionFallback(t *testing.T) {
 	// span through the normal path.
 	regionLive = nil
 	heapOne = nil
+	runtime.GC()
+	runtime.GC()
+}
+
+// TestLargeNoscanNotScavenged verifies that the scavenger (which operates on
+// the heap's page allocator) never touches the file-backed region: a live
+// region object's contents survive a forced full scavenge, and the region can
+// still serve allocations afterward.
+func TestLargeNoscanNotScavenged(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+
+	const n = 1 << 20
+	b := make([]byte, n)
+	if p := uintptr(unsafe.Pointer(&b[0])); p < lo || p >= hi {
+		t.Fatalf("alloc %x not in region [%x, %x)", p, lo, hi)
+	}
+	for i := range b {
+		b[i] = byte(i)
+	}
+
+	// Force a GC followed by a full scavenge of all free heap pages.
+	runtime.GC()
+	debug.FreeOSMemory()
+
+	// The region object must be untouched.
+	bad := 0
+	for i := range b {
+		if b[i] != byte(i) {
+			bad++
+		}
+	}
+	if bad != 0 {
+		t.Fatalf("region object corrupted after scavenge: %d bytes", bad)
+	}
+
+	// And the region must still be able to serve a new allocation.
+	b2 := make([]byte, n)
+	if p := uintptr(unsafe.Pointer(&b2[0])); p < lo || p >= hi {
+		t.Fatalf("alloc after scavenge %x not in region [%x, %x)", p, lo, hi)
+	}
+
+	b = nil
+	b2 = nil
 	runtime.GC()
 	runtime.GC()
 }
