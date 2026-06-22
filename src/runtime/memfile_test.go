@@ -281,3 +281,81 @@ func TestNoscanFileRegionPageAllocRoundTrip(t *testing.T) {
 	}
 	inRange(c, "alloc after free")
 }
+
+// setupFileRegionForTest creates a file region for use by a test and returns
+// its [base, limit) range. The region stays active after the test so that any
+// spans it served can still be freed correctly by the GC.
+func setupFileRegionForTest(t *testing.T, size uintptr) (lo, hi uintptr) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "noscanfile")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	base, _, regionSize, errmsg := runtime.NoscanFileRegionSetupForTest(dir+"/backing.bin", size)
+	if errmsg != "" {
+		t.Fatalf("setup failed: %s", errmsg)
+	}
+	return uintptr(base), uintptr(base) + regionSize
+}
+
+// TestLargeNoscanAllocFromRegion verifies that a large noscan allocation (a
+// big []byte) is served from the file-backed region.
+func TestLargeNoscanAllocFromRegion(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+
+	const n = 1 << 20 // 1 MiB, well above the large-object threshold
+	b := make([]byte, n)
+	ptr := uintptr(unsafe.Pointer(&b[0]))
+	if ptr < lo || ptr >= hi {
+		t.Fatalf("large noscan alloc %x not in region [%x, %x)", ptr, lo, hi)
+	}
+	// The allocation must be usable.
+	for i := range b {
+		b[i] = byte(i)
+	}
+	for i := range b {
+		if b[i] != byte(i) {
+			t.Fatalf("slice data mismatch at %d", i)
+		}
+	}
+}
+
+// TestLargeNoscanSurvivesGC verifies that a large noscan object allocated from
+// the region survives garbage collection with its contents intact, and that
+// freeing it later (once unreferenced) does not crash the runtime.
+func TestLargeNoscanSurvivesGC(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+
+	const n = 1 << 20
+	b := make([]byte, n)
+	ptr := uintptr(unsafe.Pointer(&b[0]))
+	if ptr < lo || ptr >= hi {
+		t.Fatalf("large noscan alloc %x not in region [%x, %x)", ptr, lo, hi)
+	}
+	for i := range b {
+		b[i] = byte(i)
+	}
+
+	// Run the marker and the sweeper. The object is live, so it must survive.
+	runtime.GC()
+	runtime.GC()
+	// Force sweeping of any dead spans from the cycles above.
+	runtime.GC()
+
+	bad := 0
+	for i := range b {
+		if b[i] != byte(i) {
+			bad++
+		}
+	}
+	if bad != 0 {
+		t.Fatalf("%d bytes corrupted after GC", bad)
+	}
+
+	// Drop the reference and force collection so the region span gets freed
+	// through the routed free path; this must not crash.
+	b = nil
+	runtime.GC()
+	runtime.GC()
+}

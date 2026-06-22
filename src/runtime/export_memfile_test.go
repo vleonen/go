@@ -27,7 +27,7 @@ func NoscanFileRegionSetupForTest(path string, size uintptr) (base unsafe.Pointe
 	if errmsg != "" {
 		return nil, -1, 0, errmsg
 	}
-	fileRegion = r
+	setFileRegion(r)
 	return unsafe.Pointer(r.base), r.fd, r.size, ""
 }
 

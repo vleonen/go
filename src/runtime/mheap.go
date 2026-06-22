@@ -962,6 +962,13 @@ func (h *mheap) alloc(npages uintptr, spanclass spanClass) *mspan {
 	// to be able to allocate heap.
 	var s *mspan
 	systemstack(func() {
+		// Large noscan allocations may be served from the file-backed region.
+		// If the region is exhausted, fall back to the regular heap below.
+		if spanclass.sizeclass() == 0 && spanclass.noscan() && noscanFileRegionEnabled() {
+			if s = noscanFileRegionAlloc(npages, spanclass); s != nil {
+				return
+			}
+		}
 		// To prevent excessive heap growth, before allocating n pages
 		// we need to sweep and reclaim at least n pages.
 		if !isSweepDone() {
@@ -1620,6 +1627,14 @@ func (h *mheap) freeManual(s *mspan, typ spanAllocType) {
 
 func (h *mheap) freeSpanLocked(s *mspan, typ spanAllocType) {
 	assertLockHeld(&h.lock)
+
+	// Spans owned by the file-backed noscan region are returned to that
+	// region's own page allocator, bypassing the heap allocator and its
+	// scavenge stats.
+	if isFileRegionAddr(s.base()) {
+		noscanFileRegionFreeLocked(s, typ)
+		return
+	}
 
 	switch s.state.get() {
 	case mSpanManual:

@@ -49,10 +49,44 @@ type noscanFileRegion struct {
 	arenas []arenaIdx
 }
 
-// fileRegion is the process-wide file-backed noscan region, or nil if the
-// feature is disabled. It is assigned during early initialization (see
-// noscanFileRegionInit) and read-only thereafter.
+// fileRegion is the file-backed noscan region currently serving allocations,
+// or nil if the feature is disabled. It is the allocation source.
 var fileRegion *noscanFileRegion
+
+// allFileRegions lists every file region ever activated. It is append-only so
+// that freeing a span from an older region still resolves correctly if
+// fileRegion is later replaced (mainly relevant to tests; in production a
+// single region is created at startup).
+var allFileRegions []*noscanFileRegion
+
+// setFileRegion activates r as the current allocation source and records it so
+// that spans it owns can always be freed back to it.
+func setFileRegion(r *noscanFileRegion) {
+	fileRegion = r
+	allFileRegions = append(allFileRegions, r)
+}
+
+// findFileRegion returns the region owning addr, or nil.
+func findFileRegion(addr uintptr) *noscanFileRegion {
+	for _, r := range allFileRegions {
+		if addr >= r.base && addr < r.base+r.size {
+			return r
+		}
+	}
+	return nil
+}
+
+// isFileRegionAddr reports whether addr lies within any file region.
+func isFileRegionAddr(addr uintptr) bool {
+	return findFileRegion(addr) != nil
+}
+
+// noscanFileRegionEnabled reports whether the file region is active and may
+// serve allocations.
+func noscanFileRegionEnabled() bool {
+	r := fileRegion
+	return r != nil && r.enabled
+}
 
 // setup reserves an arena-aligned region, creates (or opens) the backing file
 // at path, sizes it to size, and overlays a MAP_SHARED file mapping over the
@@ -177,6 +211,85 @@ func (r *noscanFileRegion) freePages(base, npages uintptr) {
 		r.pages.free(base, npages)
 		unlock(&r.lock)
 	})
+}
+
+// noscanFileRegionAlloc allocates a span of npages from the file region and
+// publishes it like a normal heap span (state, sweepgen, pageInUse, etc., via
+// initSpan). It returns nil if the region is disabled or exhausted, in which
+// case the caller falls back to the regular heap.
+//
+// This is the region counterpart of the tail of mheap.allocSpan: it reuses
+// initSpan (which handles pagesInUse, needzero, setSpans and pageInUse) and
+// then updates only the spanAllocHeap stats that mheap.freeSpanLocked will
+// later reverse. The heap's scavenge stats (heapFree/heapReleased/sysUsed) are
+// intentionally skipped: region pages are file-backed, never scavenged, and
+// not tracked by the heap's page allocator.
+//
+// Must run on the system stack (allocPages and allocMSpanLocked require it).
+//
+//go:systemstack
+func noscanFileRegionAlloc(npages uintptr, spanclass spanClass) *mspan {
+	r := fileRegion
+	if r == nil || !r.enabled {
+		return nil
+	}
+	base, ok := r.allocPages(npages)
+	if !ok {
+		return nil // exhausted; caller falls back to the heap
+	}
+	h := &mheap_
+	lock(&h.lock)
+	s := h.allocMSpanLocked()
+	h.initSpan(s, spanAllocHeap, spanclass, base, npages)
+	nbytes := npages * pageSize
+	gcController.heapInUse.add(int64(nbytes))
+	stats := memstats.heapStats.acquire()
+	atomic.Xaddint64(&stats.inHeap, int64(nbytes))
+	memstats.heapStats.release()
+	unlock(&h.lock)
+	return s
+}
+
+// noscanFileRegionFreeLocked frees a span owned by a file region. It mirrors
+// the spanAllocHeap parts of mheap.freeSpanLocked (pagesInUse, heapInUse,
+// inHeap, pageInUse bit) but returns the pages to the region's own page
+// allocator instead of the heap's, and skips the heapFree/scavenge stats.
+//
+// h.lock must be held. Must run on the system stack (freePages requires it).
+//
+//go:systemstack
+func noscanFileRegionFreeLocked(s *mspan, typ spanAllocType) {
+	assertLockHeld(&mheap_.lock)
+
+	if s.state.get() != mSpanInUse || s.allocCount != 0 || s.sweepgen != mheap_.sweepgen {
+		print("noscanFileRegionFreeLocked - span ", s, " ptr ", hex(s.base()),
+			" allocCount ", s.allocCount, " sweepgen ", s.sweepgen, "/", mheap_.sweepgen, "\n")
+		throw("noscanFileRegionFreeLocked - invalid free")
+	}
+	r := findFileRegion(s.base())
+	if r == nil {
+		throw("noscanFileRegionFreeLocked - span not owned by any file region")
+	}
+	h := &mheap_
+	h.pagesInUse.Add(-s.npages)
+	arena, pageIdx, pageMask := pageIndexOf(s.base())
+	atomic.And8(&arena.pageInUse[pageIdx], ^pageMask)
+
+	nbytes := s.npages * pageSize
+	if typ == spanAllocHeap {
+		gcController.heapInUse.add(-int64(nbytes))
+	}
+	stats := memstats.heapStats.acquire()
+	if typ == spanAllocHeap {
+		atomic.Xaddint64(&stats.inHeap, -int64(nbytes))
+	}
+	memstats.heapStats.release()
+
+	// Return the pages to the owning region's allocator.
+	r.freePages(s.base(), s.npages)
+
+	s.state.set(mSpanDead)
+	h.freeMSpanLocked(s)
 }
 
 // noscanFileConfig holds the parsed GONOSCANFILE configuration.
