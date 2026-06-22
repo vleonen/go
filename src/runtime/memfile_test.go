@@ -75,3 +75,125 @@ func TestMapSharedFilePrimitive(t *testing.T) {
 		t.Fatalf("data[size-1] = %#x, want 0xCD", data[size-1])
 	}
 }
+
+// TestParseMemSize checks the size parser used by GONOSCANFILESIZE.
+func TestParseMemSize(t *testing.T) {
+	tests := []struct {
+		in   string
+		want uintptr
+		ok   bool
+	}{
+		{"1024", 1024, true},
+		{"0", 0, true}, // parses; callers treat zero as "disabled"
+		{"1k", 1 << 10, true},
+		{"2K", 2 << 10, true},
+		{"3MiB", 3 << 20, true},
+		{"4GB", 4 << 30, true},
+		{"5g", 5 << 30, true},
+		{"16MiB", 16 << 20, true},
+		{"", 0, false},
+		{"abc", 0, false},
+		{"12x", 0, false},
+		{"KB12", 0, false},
+	}
+	for _, tc := range tests {
+		got, ok := runtime.ParseMemSize(tc.in)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("ParseMemSize(%q) = (%v, %v), want (%v, %v)", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestNoscanFileConfigFromEnv checks the configuration derivation logic.
+func TestNoscanFileConfigFromEnv(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		sizeStr  string
+		wantOk   bool
+		wantSize uintptr
+	}{
+		{"both set", "/tmp/x", "16MiB", true, 16 << 20},
+		{"path missing", "", "16MiB", false, 0},
+		{"size missing", "/tmp/x", "", false, 0},
+		{"bad size", "/tmp/x", "lots", false, 0},
+		{"zero size", "/tmp/x", "0", false, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, size, ok := runtime.NoscanFileConfigFromEnv(tc.path, tc.sizeStr)
+			if ok != tc.wantOk {
+				t.Fatalf("ok = %v, want %v (path=%q)", ok, tc.wantOk, p)
+			}
+			if ok {
+				if p != tc.path {
+					t.Errorf("path = %q, want %q", p, tc.path)
+				}
+				if size != tc.wantSize {
+					t.Errorf("size = %v, want %v", size, tc.wantSize)
+				}
+			}
+		})
+	}
+}
+
+// TestNoscanFileRegionSetup verifies that the region can be reserved, backed
+// by a file, and that writes through the region persist to the file via a
+// MAP_SHARED mapping. No allocator wiring is involved.
+func TestNoscanFileRegionSetup(t *testing.T) {
+	const size = 1 << 20 // 1 MiB
+
+	dir, err := os.MkdirTemp("", "noscanregion")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	path := dir + "/backing.bin"
+
+	base, fd, regionSize, errmsg := runtime.NoscanFileRegionSetupForTest(path, size)
+	if errmsg != "" {
+		t.Fatalf("setup failed: %s", errmsg)
+	}
+	if base == nil {
+		t.Fatal("setup returned nil base")
+	}
+	if fd < 0 {
+		t.Fatalf("setup returned bad fd %d", fd)
+	}
+	if regionSize != size {
+		t.Fatalf("region size = %d, want %d", regionSize, size)
+	}
+
+	// Write known bytes at the first and last offset through the region.
+	*(*byte)(base) = 0x11
+	*(*byte)(unsafe.Add(base, regionSize-1)) = 0x22
+
+	// Persistence check #1: a fresh MAP_SHARED mapping of the same file must
+	// observe the writes (they share the page cache).
+	p2, errc := runtime.Mmap(nil, regionSize, runtime.PROT_READ|runtime.PROT_WRITE, runtime.MAP_SHARED, fd, 0)
+	if errc != 0 {
+		t.Fatalf("second mmap returned error %d", errc)
+	}
+	if *(*byte)(p2) != 0x11 {
+		t.Fatalf("second mapping [0] = %#x, want 0x11", *(*byte)(p2))
+	}
+	if *(*byte)(unsafe.Add(p2, regionSize-1)) != 0x22 {
+		t.Fatalf("second mapping [end] = %#x, want 0x22", *(*byte)(unsafe.Add(p2, regionSize-1)))
+	}
+	runtime.Munmap(p2, regionSize)
+
+	// Persistence check #2: the file on disk carries the data and the size.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) != size {
+		t.Fatalf("file size = %d, want %d", len(data), size)
+	}
+	if data[0] != 0x11 {
+		t.Fatalf("data[0] = %#x, want 0x11", data[0])
+	}
+	if data[size-1] != 0x22 {
+		t.Fatalf("data[size-1] = %#x, want 0x22", data[size-1])
+	}
+}
