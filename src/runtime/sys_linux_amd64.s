@@ -25,6 +25,7 @@
 #define SYS_sched_yield 	24
 #define SYS_mincore		27
 #define SYS_madvise		28
+#define SYS_ftruncate		46
 #define SYS_nanosleep		35
 #define SYS_setittimer		38
 #define SYS_getpid		39
@@ -542,6 +543,15 @@ TEXT runtime·madvise(SB),NOSPLIT,$0
 	MOVQ	$SYS_madvise, AX
 	SYSCALL
 	MOVL	AX, ret+24(FP)
+	RET
+
+// func ftruncate(fd int32, length int64) int32
+TEXT runtime·ftruncate(SB),NOSPLIT,$0-20
+	MOVL	fd+0(FP), DI
+	MOVQ	length+8(FP), SI
+	MOVQ	$SYS_ftruncate, AX
+	SYSCALL
+	MOVL	AX, ret+16(FP)
 	RET
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,

@@ -33,6 +33,7 @@
 #define SYS_rt_sigprocmask	135
 #define SYS_sigaltstack		132
 #define SYS_madvise		233
+#define SYS_ftruncate		46
 #define SYS_mincore		232
 #define SYS_getpid		172
 #define SYS_gettid		178
@@ -636,6 +637,15 @@ TEXT runtime·madvise(SB),NOSPLIT|NOFRAME,$0
 	MOVD	$SYS_madvise, R8
 	SVC
 	MOVW	R0, ret+24(FP)
+	RET
+
+// func ftruncate(fd int32, length int64) int32
+TEXT runtime·ftruncate(SB),NOSPLIT|NOFRAME,$0-20
+	MOVW	fd+0(FP), R0
+	MOVD	length+8(FP), R1
+	MOVD	$SYS_ftruncate, R8
+	SVC
+	MOVW	R0, ret+16(FP)
 	RET
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,
