@@ -399,3 +399,48 @@ func TestLargeNoscanReuseAfterFree(t *testing.T) {
 		}
 	}
 }
+
+// TestLargeNoscanExhaustionFallback verifies that once the file region is full,
+// large noscan allocations transparently fall back to the regular heap, and
+// that freeing a mix of region-served and heap-served spans works (each via its
+// own free path).
+func TestLargeNoscanExhaustionFallback(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 4<<20) // small region
+
+	// Allocate 1 MiB noscan objects, keeping them live, until one no longer fits
+	// in the region and is served from the heap.
+	var regionLive [][]byte
+	var heapOne []byte
+	for i := 0; i < 64; i++ {
+		b := make([]byte, 1<<20)
+		p := uintptr(unsafe.Pointer(&b[0]))
+		if p < lo || p >= hi {
+			heapOne = b
+			break
+		}
+		regionLive = append(regionLive, b)
+	}
+	if heapOne == nil {
+		t.Fatalf("region never exhausted after %d allocs; fallback not exercised", len(regionLive))
+	}
+
+	// The heap-served allocation must be usable and survive GC.
+	for i := range heapOne {
+		heapOne[i] = byte(i)
+	}
+	runtime.GC()
+	runtime.GC()
+	for i := range heapOne {
+		if heapOne[i] != byte(i) {
+			t.Fatalf("heap fallback slice corrupted at %d", i)
+		}
+	}
+
+	// Drop everything and collect, freeing a mix of region and heap spans. This
+	// must not crash: region spans go through the region free path, the heap
+	// span through the normal path.
+	regionLive = nil
+	heapOne = nil
+	runtime.GC()
+	runtime.GC()
+}
