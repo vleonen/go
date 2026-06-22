@@ -359,3 +359,43 @@ func TestLargeNoscanSurvivesGC(t *testing.T) {
 	runtime.GC()
 	runtime.GC()
 }
+
+// TestLargeNoscanReuseAfterFree verifies that after a large noscan object from
+// the region is freed, a subsequent large noscan allocation is still served
+// from the region. This exercises the end-to-end alloc -> sweep-free -> realloc
+// path at the Go allocation API level (the low-level page reuse is covered by
+// TestNoscanFileRegionPageAllocRoundTrip).
+func TestLargeNoscanReuseAfterFree(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+
+	const n = 1 << 20
+	b1 := make([]byte, n)
+	p1 := uintptr(unsafe.Pointer(&b1[0]))
+	if p1 < lo || p1 >= hi {
+		t.Fatalf("first alloc %x not in region [%x, %x)", p1, lo, hi)
+	}
+
+	// Free b1 and let the sweeper return its span to the region allocator.
+	b1 = nil
+	runtime.GC()
+	runtime.GC()
+
+	// Allocate again. It must still come from the region (the region allocator
+	// is healthy after a free cycle); whether it reuses b1's exact address is an
+	// allocator detail.
+	b2 := make([]byte, n)
+	p2 := uintptr(unsafe.Pointer(&b2[0]))
+	if p2 < lo || p2 >= hi {
+		t.Fatalf("alloc after free %x not in region [%x, %x); region allocator not reused", p2, lo, hi)
+	}
+
+	// b2 must be usable.
+	for i := range b2 {
+		b2[i] = byte(i)
+	}
+	for i := range b2 {
+		if b2[i] != byte(i) {
+			t.Fatalf("reused slice data mismatch at %d", i)
+		}
+	}
+}
