@@ -7,8 +7,12 @@
 package runtime_test
 
 import (
+	"bytes"
+	"internal/testenv"
 	"os"
+	"os/exec"
 	"testing"
+	"time"
 	"unsafe"
 
 	"runtime"
@@ -487,4 +491,111 @@ func TestLargeNoscanNotScavenged(t *testing.T) {
 	b2 = nil
 	runtime.GC()
 	runtime.GC()
+}
+
+// TestLargeNoscanFinalizer verifies that a finalizer attached to a large
+// noscan object allocated from the region runs when the object becomes
+// unreachable. This exercises the markrootSpans finalizer path for a region
+// span.
+func TestLargeNoscanFinalizer(t *testing.T) {
+	setupFileRegionForTest(t, 8<<20)
+
+	const n = 1 << 20
+	b := make([]byte, n)
+	done := make(chan struct{}, 1)
+	runtime.SetFinalizer(&b[0], func(*byte) {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	})
+	// Drop all references so the object becomes collectible.
+	b = nil
+	runtime.GC()
+	runtime.GC() // advance mark + sweep so the finalizer is queued/run
+
+	select {
+	case <-done:
+		// finalizer ran
+	case <-time.After(5 * time.Second):
+		t.Fatal("finalizer on region object did not run")
+	}
+}
+
+// TestLargeNoscanStress exercises many large noscan allocations of varying
+// sizes under GC pressure, forcing the region to fill and spill onto the heap
+// and freeing spans through both free paths concurrently.
+func TestLargeNoscanStress(t *testing.T) {
+	setupFileRegionForTest(t, 8<<20)
+
+	keep := make([][]byte, 0, 16)
+	for i := 0; i < 300; i++ {
+		sz := (i%8 + 1) * 64 * 1024 // 64 KiB .. 512 KiB, all large noscan
+		b := make([]byte, sz)
+		v := byte(i)
+		b[0] = v
+		b[len(b)-1] = v
+		keep = append(keep, b)
+		if len(keep) > 16 {
+			keep = keep[1:] // drop oldest; freed later by the GC
+		}
+		if i%50 == 0 {
+			runtime.GC()
+		}
+	}
+	// Survivors must be intact (b[0] == b[len-1], as written).
+	for _, b := range keep {
+		if b[0] != b[len(b)-1] {
+			t.Fatal("stress: survivor data inconsistent")
+		}
+	}
+	keep = nil
+	runtime.GC()
+	runtime.GC()
+}
+
+// TestNoscanFileEnvHelper is the in-process side of the env integration test.
+// It only does work when GONOSCANFILE is set in its environment (i.e. when run
+// as a subprocess by TestNoscanFileEnvIntegration).
+func TestNoscanFileEnvHelper(t *testing.T) {
+	path := os.Getenv("GONOSCANFILE")
+	if path == "" {
+		t.Skip("only runs as a subprocess with GONOSCANFILE set")
+	}
+	// The region was created at startup from the environment. A large noscan
+	// allocation must therefore be file-backed: writes must appear in the file.
+	const n = 1 << 20
+	b := make([]byte, n)
+	marker := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	copy(b[:len(marker)], marker)
+	copy(b[n-len(marker):], marker)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Contains(data, marker) {
+		t.Fatalf("allocation marker not found in backing file; region not file-backed")
+	}
+}
+
+// TestNoscanFileEnvIntegration verifies the end-to-end env-driven startup: a
+// subprocess with GONOSCANFILE/GONOSCANFILESIZE set creates the region at
+// init, and a large noscan allocation in it is backed by the named file.
+func TestNoscanFileEnvIntegration(t *testing.T) {
+	testenv.MustHaveExec(t)
+
+	dir := t.TempDir()
+	path := dir + "/envregion.bin"
+
+	cmd := testenv.CleanCmdEnv(exec.Command(os.Args[0],
+		"-test.run=^TestNoscanFileEnvHelper$", "-test.v"))
+	cmd.Env = append(cmd.Env,
+		"GONOSCANFILE="+path,
+		"GONOSCANFILESIZE=8MiB",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helper subprocess failed: %v\n%s", err, out)
+	}
 }
