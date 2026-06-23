@@ -450,6 +450,88 @@ func TestLargeNoscanExhaustionFallback(t *testing.T) {
 	runtime.GC()
 }
 
+// TestSmallNoscanAllocFromRegion verifies that small noscan allocations are
+// served from the file-backed region once the per-P mcache/mcentral exhaust
+// their existing (heap-sourced) spans and must grow new ones. The region is
+// the preferred source for noscan span growth, so at least some of a large
+// batch of small []byte must land in the region.
+func TestSmallNoscanAllocFromRegion(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+
+	// Allocate many small noscan objects, keeping them live so their spans fill
+	// and the mcentral is forced to grow fresh (region-sourced) spans.
+	const n = 50000
+	live := make([][]byte, 0, n)
+	inRegion := 0
+	for i := 0; i < n; i++ {
+		b := make([]byte, 32)
+		live = append(live, b)
+		if p := uintptr(unsafe.Pointer(&b[0])); p >= lo && p < hi {
+			inRegion++
+		}
+	}
+	if inRegion == 0 {
+		t.Fatalf("no small noscan allocations served from region after %d allocs", n)
+	}
+	t.Logf("%d/%d small noscan allocations served from region", inRegion, n)
+
+	// Region-served objects must be usable.
+	for i, b := range live {
+		b[0] = byte(i)
+		b[len(b)-1] = byte(i)
+	}
+
+	// Drop everything and collect, freeing small region spans through the routed
+	// free path.
+	live = nil
+	runtime.GC()
+	runtime.GC()
+}
+
+// TestSmallNoscanSurvivesGC verifies that small noscan objects served from the
+// region survive garbage collection with their contents intact.
+func TestSmallNoscanSurvivesGC(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+
+	// Collect a set of region-served small objects, filled with known data.
+	var region [][]byte
+	for i := 0; i < 50000; i++ {
+		b := make([]byte, 32)
+		if p := uintptr(unsafe.Pointer(&b[0])); p >= lo && p < hi {
+			for j := range b {
+				b[j] = byte(j)
+			}
+			region = append(region, b)
+			if len(region) >= 2000 {
+				break
+			}
+		}
+	}
+	if len(region) == 0 {
+		t.Fatal("no small noscan allocations served from region")
+	}
+
+	runtime.GC()
+	runtime.GC()
+
+	bad := 0
+	for _, b := range region {
+		for j := range b {
+			if b[j] != byte(j) {
+				bad++
+				break
+			}
+		}
+	}
+	if bad != 0 {
+		t.Fatalf("%d/%d region small objects corrupted after GC", bad, len(region))
+	}
+
+	region = nil
+	runtime.GC()
+	runtime.GC()
+}
+
 // TestLargeNoscanNotScavenged verifies that the scavenger (which operates on
 // the heap's page allocator) never touches the file-backed region: a live
 // region object's contents survive a forced full scavenge, and the region can

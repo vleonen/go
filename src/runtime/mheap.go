@@ -962,9 +962,10 @@ func (h *mheap) alloc(npages uintptr, spanclass spanClass) *mspan {
 	// to be able to allocate heap.
 	var s *mspan
 	systemstack(func() {
-		// Large noscan allocations may be served from the file-backed region.
-		// If the region is exhausted, fall back to the regular heap below.
-		if spanclass.sizeclass() == 0 && spanclass.noscan() && noscanFileRegionEnabled() {
+		// Any noscan allocation (large, small, or tiny) may be served from the
+		// file-backed region. If the region is exhausted, fall back to the
+		// regular heap below.
+		if spanclass.noscan() && noscanFileRegionEnabled() {
 			if s = noscanFileRegionAlloc(npages, spanclass); s != nil {
 				return
 			}
