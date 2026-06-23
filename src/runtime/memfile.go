@@ -147,6 +147,19 @@ func (r *noscanFileRegion) setup(path string, size uintptr) string {
 	r.fd = fd
 	r.enabled = true
 
+	// Account the whole region as free, committed, mapped heap memory. This
+	// mirrors what the heap does when it grows a new arena: the bytes start in
+	// heapFree / committed / mappedReady, and per-span allocation moves them
+	// from heapFree to heapInUse (see noscanFileRegionAlloc). Keeping these in
+	// sync with the consistent stats is required by readmemstats_m's checks.
+	gcController.heapFree.add(int64(size))
+	gcController.mappedReady.Add(int64(size))
+	{
+		stats := memstats.heapStats.acquire()
+		atomic.Xaddint64(&stats.committed, int64(size))
+		memstats.heapStats.release()
+	}
+
 	// Set up the dedicated page allocator over the region and register the
 	// region's arenas so that spanOf / pageIndexOf (and thus the GC) can
 	// resolve addresses in [base, base+size).
@@ -220,10 +233,11 @@ func (r *noscanFileRegion) freePages(base, npages uintptr) {
 //
 // This is the region counterpart of the tail of mheap.allocSpan: it reuses
 // initSpan (which handles pagesInUse, needzero, setSpans and pageInUse) and
-// then updates only the spanAllocHeap stats that mheap.freeSpanLocked will
-// later reverse. The heap's scavenge stats (heapFree/heapReleased/sysUsed) are
-// intentionally skipped: region pages are file-backed, never scavenged, and
-// not tracked by the heap's page allocator.
+// then updates the spanAllocHeap stats that mheap.freeSpanLocked will later
+// reverse. Because the whole region was accounted as heapFree/committed at
+// setup, allocating a span moves nbytes from heapFree to heapInUse (mirroring
+// allocSpan with scav==0). The scavenge stats (heapReleased/sysUsed) are
+// skipped: region pages are file-backed and never scavenged.
 //
 // Must run on the system stack (allocPages and allocMSpanLocked require it).
 //
@@ -242,6 +256,7 @@ func noscanFileRegionAlloc(npages uintptr, spanclass spanClass) *mspan {
 	s := h.allocMSpanLocked()
 	h.initSpan(s, spanAllocHeap, spanclass, base, npages)
 	nbytes := npages * pageSize
+	gcController.heapFree.add(-int64(nbytes))
 	gcController.heapInUse.add(int64(nbytes))
 	stats := memstats.heapStats.acquire()
 	atomic.Xaddint64(&stats.inHeap, int64(nbytes))
@@ -277,7 +292,9 @@ func noscanFileRegionFreeLocked(s *mspan, typ spanAllocType) {
 
 	nbytes := s.npages * pageSize
 	if typ == spanAllocHeap {
+		// Move nbytes back from heapInUse to heapFree (reverse of alloc).
 		gcController.heapInUse.add(-int64(nbytes))
+		gcController.heapFree.add(int64(nbytes))
 	}
 	stats := memstats.heapStats.acquire()
 	if typ == spanAllocHeap {
