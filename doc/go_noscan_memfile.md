@@ -1,8 +1,8 @@
-# File-backed memory region for large noscan objects
+# File-backed memory region for noscan objects
 
 This document describes the *noscan file region*: an optional runtime feature
-that serves large, pointer-free heap allocations from a dedicated,
-file-backed (or block-device-backed) memory region.
+that serves pointer-free heap allocations — large, small, and tiny — from a
+dedicated, file-backed (or block-device-backed) memory region.
 
 Status: implemented for `linux/amd64` and `linux/arm64`. Disabled everywhere
 else, and when not configured.
@@ -28,27 +28,38 @@ natural fit for backing stores other than anonymous RAM:
   `MAP_SHARED` makes writes visible to other mappers of the same file.
 
 The feature lets a program opt into this by setting two environment variables.
-No source changes are required: ordinary `make([]byte, …)` calls for large
-sizes are transparently served from the region when it is enabled.
+No source changes are required: ordinary `make([]byte, …)` and similar
+allocations are transparently served from the region when it is enabled.
 
 ## 2. What is routed to the region
 
-Only allocations that are **both**:
+Allocations that are **noscan** — the allocated type contains no pointers
+(`typ == nil || !typ.Pointers()`). This covers **all** noscan objects regardless
+of size:
 
-* **large** — larger than the small-allocation threshold
-  (`maxSmallSize - mallocHeaderSize`, currently `32768 - 8 = 32760` bytes), i.e.
-  they take the large-object path (`mallocgcLarge` → `mcache.allocLarge` →
-  `mheap.alloc` with size class 0); and
-* **noscan** — the allocated type contains no pointers (`typ == nil ||
-  !typ.Pointers()`).
+* **large** noscan objects (size class 0; backing arrays of big `[]byte`,
+  `[]float64`, `string`, etc.), and
+* **small** and **tiny** noscan objects (the per-size-class `mcentral`/`mcache`
+  path, including the 16-byte tiny allocator).
 
-In span-class terms, that is exactly `makeSpanClass(0, /*noscan=*/true)`.
+In span-class terms, that is any span with the noscan bit set — all odd
+`spanClass` values (large, small, and `tinySpanClass`).
 
-Everything else — small noscan allocations, all scan allocations, stacks, GC
-metadata, user arenas — is unaffected and continues to come from the regular
-heap. Small noscan objects deliberately stay on the normal heap because they
-flow through the per-size-class `mcentral`/`mcache` hot path, and moving them
-would add overhead to the most common allocations for little benefit.
+Everything that is **not** noscan — scan allocations, stacks, GC metadata, user
+arenas — is unaffected and continues to come from the regular heap.
+
+Routing happens at the single span chokepoint `mheap.alloc`, which is reached
+only when a span is grown (once per span, amortized over 128–1024 object
+allocations), not on every allocation. Region spans are preferred for noscan
+span growth; when the region is exhausted, allocation falls back to the regular
+heap transparently.
+
+> **Caveat (writeback churn).** Small and tiny noscan objects churn frequently.
+> Because the region is file-backed, every span zero/refill touches the backing
+> file's page cache, generating writeback. This is typically fine for zram
+> (transparent compression) but can be a cost for a disk file under heavy
+> small-object churn — prefer zram, a generously sized region, or (future) the
+> selective annotation mode for disk-backed deployments.
 
 ## 3. Enabling the feature
 
@@ -120,15 +131,17 @@ then fall back to the regular heap.
 
 ### 4.2 Allocation routing
 
-`mheap.alloc` is the single chokepoint for large objects (size class 0 has no
-`mcentral`, so it is only reached from `mcache.allocLarge`). When the region is
-enabled and the requested class is `makeSpanClass(0, true)`, it calls
+`mheap.alloc` is the single chokepoint for **all** spans, small and large (small
+spans arrive via `mcentral.grow`, large spans via `mcache.allocLarge`). When the
+region is enabled and the requested class has the noscan bit set, it calls
 `noscanFileRegionAlloc`:
 
 * It draws `npages` from the region's own page allocator (`pages.alloc`).
 * It reuses the standard `mheap.initSpan`, which sets the span class, sweep
   generation, state (`mSpanInUse`), `pageInUse` bit, `pagesInUse` counter,
-  `needzero`, and publishes the span into `heapArena.spans`.
+  `needzero`, and publishes the span into `heapArena.spans`. `initSpan` handles
+  every size class, so small and tiny spans are initialized identically to large
+  ones (for noscan, no per-object pointer bitmap is reserved).
 * It then updates the `spanAllocHeap` stats (`heapInUse`, the consistent `inHeap`
   counter) that the sweep path will later reverse.
 
@@ -138,10 +151,16 @@ transparent. The object's `needzero` is handled correctly by the existing
 `allocNeedsZero` mechanism (region arenas' `zeroedBase` advances monotonically),
 so reused region pages are zeroed before reuse exactly like ordinary heap pages.
 
-`mcache.allocLarge` does the rest of the large-object work unchanged: it bumps
-`heapLive` (`gcController.update`), pushes the span onto the size class's swept
-list so the background sweeper can find it, sets `freeindex`/`allocCount`, and
-`mallocgcLarge` zero-fills and publishes the object.
+For small and tiny objects the surrounding allocation path is unchanged:
+`mallocgcSmallNoscan`/`mallocgcTiny` use the per-P `mcache`'s cached span, and
+only when that span is exhausted does `mcache.refill` → `mcentral.cacheSpan` →
+`mcentral.grow` → `mheap.alloc` draw a fresh region span. Because the chokepoint
+is per-span, the routing check executes at most once per 128–1024 object
+allocations, and even less often in steady state (when `cacheSpan` is served from
+swept partial spans). `mcache.allocLarge` does the rest of the large-object work
+unchanged: it bumps `heapLive` (`gcController.update`), pushes the span onto the
+size class's swept list so the background sweeper can find it, sets
+`freeindex`/`allocCount`, and `mallocgcLarge` zero-fills and publishes the object.
 
 ### 4.3 Free routing
 
@@ -155,8 +174,10 @@ a file region (`isFileRegionAddr`) and calls `noscanFileRegionFreeLocked`, which
 * intentionally skips the heap's scavenge stats (`heapFree`/`heapReleased`) and
   `sysUsed`, since region pages are file-backed and never scavenged.
 
-Region spans are freed through the same sweeper as ordinary large spans (they
-were pushed into the size class's swept list at allocation time), so sweeping
+Region spans are freed through the same sweeper as ordinary spans of their size
+class: large region spans are pushed onto the size-class-0 swept list at
+allocation time (`mcache.allocLarge`), and small/tiny region spans cycle through
+their `mcentral` partial/full lists just like heap spans. Either way, sweeping
 needs no special handling.
 
 ### 4.4 Garbage collection
@@ -169,7 +190,7 @@ marking and sweeping require no changes:
   arenas are registered) and fast-paths the noscan object to black, setting the
   `pageMarks` bit. The object's contents are never scanned, exactly as for any
   noscan object.
-* **Sweeping.** Region spans are swept like any other large span.
+* **Sweeping.** Region spans are swept like any other span of the same class.
 * **Finalizers.** A finalizer attached to a region object is handled by the
   standard `markrootSpans` path; the finalizer function is scanned and the
   object's contents are skipped (as for all noscan spans with finalizers).
@@ -244,32 +265,37 @@ Key runtime functions: `noscanFileRegionInit`, `noscanFileRegionAlloc`,
 * `TestNoscanFileRegionSetup` — region maps a file and writes persist.
 * `TestNoscanFileRegionArenaRegistered` — arena metadata resolves region addresses.
 * `TestNoscanFileRegionPageAllocRoundTrip` — the dedicated page allocator.
-* `TestLargeNoscanAllocFromRegion` / `TestLargeNoscanSurvivesGC` — routing and GC survival.
+* `TestLargeNoscanAllocFromRegion` / `TestLargeNoscanSurvivesGC` — large routing and GC survival.
 * `TestLargeNoscanReuseAfterFree` — end-to-end free→realloc.
 * `TestLargeNoscanExhaustionFallback` — transparent fallback to the heap.
+* `TestSmallNoscanAllocFromRegion` / `TestSmallNoscanSurvivesGC` — small noscan routing and GC survival.
+* `TestTinyNoscanFromRegion` — tiny (sub-16-byte) noscan routing.
+* `TestNoscanMixedStress` — tiny/small/large together under GC.
 * `TestLargeNoscanNotScavenged` — the scavenger leaves the region resident.
 * `TestLargeNoscanFinalizer` — finalizers on region objects.
 * `TestLargeNoscanStress` — many sizes under GC pressure.
 * `TestNoscanFileEnvIntegration` — runs a subprocess with the env vars set and
-  verifies the allocation is file-backed end-to-end.
+  verifies both a large and a small noscan allocation are file-backed end-to-end.
 
 Run with:
 
 ```sh
-bin/go test ./src/runtime -run 'TestLargeNoscan|TestNoscanFile|TestMapSharedFilePrimitive|TestParseMemSize'
+bin/go test ./src/runtime -run 'TestLargeNoscan|TestSmallNoscan|TestTinyNoscan|TestNoscanMixed|TestNoscanFile|TestMapSharedFilePrimitive|TestParseMemSize'
 ```
 
-## 9. Limitations and future work
+## 9. Limitations
 
 * **Architectures.** Only `linux/amd64` and `linux/arm64`. Other platforms use
   the stub (feature disabled).
-* **Large objects only.** Small noscan allocations are not routed.
 * **Regular files only (today).** `ftruncate` is required to succeed, so a raw
   block device currently fails setup. Backing `/dev/zramN` requires adding a
   `BLKGETSIZE64`-based size path and skipping `ftruncate` for devices.
 * **Fully resident.** Region pages are never scavenged. For zram this is usually
   fine (zram compresses transparently); for disk files, an optional mode that
   `MADV_DONTNEED`s cold region pages could be added.
+* **Writeback churn.** Because the region is file-backed, small/tiny noscan
+  churn generates page-cache writeback (see §2 caveat). Prefer zram or a large
+  region for disk-backed deployments.
 * **Mapping stats.** The total file-mapping size is not added to
   `gcController.mappedReady`; in-use span bytes are accounted normally.
 * **Single region.** One region per process, sized by `GONOSCANFILESIZE`; it
@@ -277,7 +303,34 @@ bin/go test ./src/runtime -run 'TestLargeNoscan|TestNoscanFile|TestMapSharedFile
 * **Lifecycle.** The backing file and mapping live for the whole process. The
   runtime does not unlink or shrink the file when objects are freed.
 
-## 10. Quick start
+## 10. Future improvements
+
+A tracked list of useful follow-ups for the feature (not yet implemented):
+
+1. **Block-device (zram) backing.** Detect the device size via `BLKGETSIZE64`
+   and skip `ftruncate`, so `/dev/zramN` works directly instead of requiring a
+   regular file.
+2. **Selective annotation.** A `//go:noscanfile` pragma and/or an arena-style
+   API (`FileArena`) to route only specific functions'/objects' noscan to the
+   region. This cuts writeback churn for disk-backed deployments (where routing
+   *all* noscan may be too aggressive) and gives explicit lifetime control.
+3. **Growable region.** Allow the region to extend (map additional file-backed
+   chunks) on exhaustion instead of always falling back to the regular heap.
+4. **Scavenging policy.** An optional mode that `MADV_DONTNEED`s cold region
+   pages (mainly useful for disk-backed regions) to reclaim clean file pages.
+5. **Accurate global stats.** Add the region mapping to
+   `gcController.mappedReady`, and expose region usage (bytes in use, exhaustion
+   count) via `runtime.ReadMemStats` or a `GODEBUG` readout.
+6. **More architectures.** Extend beyond `linux/amd64` and `linux/arm64`
+   (e.g. `riscv64`, `loong64`, `ppc64le`). Note the 32-bit `off_t` complication
+   for `ftruncate` on `linux/386` and `linux/arm`.
+7. **Huge-page hint.** Apply `MADV_HUGEPAGE` to the region mapping where it
+   would reduce TLB pressure.
+8. **File reclamation.** Hole-punch (`fallocate` with
+   `FALLOC_FL_PUNCH_HOLE`) or shrink the backing file as region spans free,
+   instead of holding a fixed-size file for the process lifetime.
+
+## 11. Quick start
 
 ```sh
 # 1) Build the toolchain (once).
@@ -287,6 +340,7 @@ cd src && GOROOT_BOOTSTRAP=/path/to/go1.24.6+ ./make.bash
 GONOSCANFILE=/tmp/noscan.bin GONOSCANFILESIZE=512MiB ../bin/go run ./yourprogram
 ```
 
-Large `[]byte`/`string` allocations in `yourprogram` now reside in
-`/tmp/noscan.bin` (or `/dev/zramN`) instead of anonymous RAM, with no code
-changes and full garbage-collection safety.
+Noscan allocations in `yourprogram` (`[]byte`, `[]float64`, `string`, etc.,
+large, small, and tiny) now reside in `/tmp/noscan.bin` (or `/dev/zramN`)
+instead of anonymous RAM, with no code changes and full garbage-collection
+safety.
