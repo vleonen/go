@@ -532,7 +532,74 @@ func TestSmallNoscanSurvivesGC(t *testing.T) {
 	runtime.GC()
 }
 
-// TestLargeNoscanNotScavenged verifies that the scavenger (which operates on
+// TestTinyNoscanFromRegion verifies that tiny noscan allocations (sub-16-byte,
+// coalesced into 16-byte slots of tinySpanClass / spanClass 5) are served from
+// the file-backed region once the tiny span is grown there.
+func TestTinyNoscanFromRegion(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+
+	// Tiny allocations are packed into 16-byte slots; once the spanClass-5 span
+	// is grown from the region, the tiny block pointer lives in the region.
+	const n = 100000
+	live := make([][]byte, 0, n)
+	inRegion := 0
+	for i := 0; i < n; i++ {
+		b := make([]byte, 8) // < maxTinySize (16) -> tiny noscan path
+		live = append(live, b)
+		if p := uintptr(unsafe.Pointer(&b[0])); p >= lo && p < hi {
+			inRegion++
+		}
+	}
+	if inRegion == 0 {
+		t.Fatalf("no tiny noscan allocations served from region after %d allocs", n)
+	}
+	t.Logf("%d/%d tiny noscan allocations served from region", inRegion, n)
+
+	live = nil
+	runtime.GC()
+	runtime.GC()
+}
+
+// TestNoscanMixedStress exercises tiny, small, and large noscan allocations
+// together under GC pressure, forcing the region to fill and spill onto the
+// heap, and freeing spans of all three sizes through their routed free paths.
+func TestNoscanMixedStress(t *testing.T) {
+	setupFileRegionForTest(t, 8<<20)
+
+	keep := make([][]byte, 0, 64)
+	for i := 0; i < 1500; i++ {
+		var sz int
+		switch i % 3 {
+		case 0:
+			sz = 8 // tiny
+		case 1:
+			sz = 200 // small
+		case 2:
+			sz = 100000 // large
+		}
+		b := make([]byte, sz)
+		v := byte(i)
+		b[0] = v
+		b[len(b)-1] = v
+		keep = append(keep, b)
+		if len(keep) > 32 {
+			keep = keep[1:] // drop oldest; freed later by the GC
+		}
+		if i%100 == 0 {
+			runtime.GC()
+		}
+	}
+	// Survivors must be internally consistent (b[0] == b[len-1], as written).
+	for _, b := range keep {
+		if b[0] != b[len(b)-1] {
+			t.Fatal("mixed stress: survivor data inconsistent")
+		}
+	}
+	keep = nil
+	runtime.GC()
+	runtime.GC()
+}
+
 // the heap's page allocator) never touches the file-backed region: a live
 // region object's contents survive a forced full scavenge, and the region can
 // still serve allocations afterward.
@@ -659,6 +726,26 @@ func TestNoscanFileEnvHelper(t *testing.T) {
 	if !bytes.Contains(data, marker) {
 		t.Fatalf("allocation marker not found in backing file; region not file-backed")
 	}
+
+	// A small noscan allocation must also be file-backed. Allocate a batch so
+	// the mcache/mcentral grows a region-sourced span, then look for the marker
+	// in the backing file. (Each small object's offset in the file depends on
+	// where the region placed its span, so search the whole file.)
+	smallMarker := []byte{0xCA, 0xFE, 0xBA, 0xBE}
+	small := make([][]byte, 0, 20000)
+	for i := 0; i < 20000; i++ {
+		b := make([]byte, 64)
+		copy(b, smallMarker)
+		small = append(small, b)
+	}
+	data2, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Contains(data2, smallMarker) {
+		t.Fatalf("small allocation marker not found in backing file; small noscan not file-backed")
+	}
+	_ = small
 }
 
 // TestNoscanFileEnvIntegration verifies the end-to-end env-driven startup: a
