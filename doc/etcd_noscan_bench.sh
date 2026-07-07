@@ -317,8 +317,8 @@ SUMMARY="$RESULTS/summary.txt"
     [[ -f "$bench_file" && -f "$metrics_file" ]] || continue
 
     reqs=$(grep -m1 'Requests/sec' "$bench_file" | awk '{printf "%.0f", $2}')
-    p50=$(grep -m1 '50% in' "$bench_file" | awk '{printf "%.1f", $2*1000}')
-    p99=$(grep -m1 '99% in' "$bench_file" | awk '{printf "%.1f", $2*1000}')
+    p50=$(grep -m1 '50% in' "$bench_file" | awk '{printf "%.1f", $3*1000}')
+    p99=$(grep -m1 '99% in' "$bench_file" | awk '{printf "%.1f", $3*1000}')
     rss=$(awk -F= '/rss_after/{print $2}' "$metrics_file")
     mm=$(awk -F= '/mm_after/{print $2}' "$metrics_file")
 
