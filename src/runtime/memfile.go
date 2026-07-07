@@ -144,10 +144,13 @@ func (r *noscanFileRegion) setup(path string, size uintptr) string {
 	}
 
 	// Size the backing store. For a regular file, ftruncate extends it to the
-	// requested size. ftruncate fails on a block device (EINVAL); in that case
-	// query the device size with BLKGETSIZE64 and use the device directly
-	// (without truncation) provided it is at least as large as the region.
+	// requested size; the new pages are guaranteed zero. ftruncate fails on a
+	// block device (EINVAL); in that case query the device size with
+	// BLKGETSIZE64 and use the device directly (without truncation) provided it
+	// is at least as large as the region.
+	isBlockDevice := false
 	if rc := ftruncate(fd, int64(size)); rc != 0 {
+		isBlockDevice = true
 		var devSize uint64
 		if rc := ioctl(fd, blkGetSize64, unsafe.Pointer(&devSize)); rc != 0 {
 			closefd(fd)
@@ -168,6 +171,15 @@ func (r *noscanFileRegion) setup(path string, size uintptr) string {
 		closefd(fd)
 		sysFree(base, size, &memstats.other_sys)
 		return "noscan file region: mmap MAP_SHARED failed"
+	}
+
+	// A regular file's pages are zero after ftruncate, so the heap's
+	// allocNeedsZero check (which assumes freshly-mapped pages are zero) is
+	// valid. A block device, however, retains data from previous use; without
+	// ftruncate to clear it the pages contain stale content. Zero the region
+	// explicitly so that allocNeedsZero's assumption holds.
+	if isBlockDevice {
+		memclrNoHeapPointers(base, size)
 	}
 
 	r.base = uintptr(base)
