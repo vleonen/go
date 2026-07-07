@@ -28,6 +28,11 @@ func ftruncate(fd int32, length int64) int32
 // architectures (_IOR(0x12, 114, 8)).
 const blkGetSize64 = 0x80081272
 
+// defaultNoscanFileMinSize is the compile-time default for the minimum
+// per-object size routed to the file region. Zero means accept all noscan
+// objects. Override at runtime with GONOSCANFILEMIN.
+const defaultNoscanFileMinSize uintptr = 0
+
 // ioctl calls the ioctl system call. It returns 0 on success or a negative
 // errno on failure.
 //
@@ -57,6 +62,10 @@ type noscanFileRegion struct {
 	// pageout controls whether live span pages are proactively evicted to
 	// the backing store (via madvise(MADV_PAGEOUT)) after each GC sweep.
 	pageout bool
+	// minSize is the minimum per-object size for routing to the region.
+	// Objects whose size class is at most minSize are left on the regular
+	// heap. Zero means accept all (backward compatible).
+	minSize uintptr
 
 	// lock guards pages, the dedicated page allocator for this region. It is
 	// also passed to pages.init as the page allocator's mheapLock.
@@ -107,6 +116,22 @@ func isFileRegionAddr(addr uintptr) bool {
 func noscanFileRegionEnabled() bool {
 	r := fileRegion
 	return r != nil && r.enabled
+}
+
+// noscanFileRegionAccepts reports whether the file region is active and the
+// given span class should be served from it. Large allocations (sizeclass 0)
+// are always accepted; small allocations are accepted only when their
+// per-object size exceeds the region's configured minimum (minSize).
+func noscanFileRegionAccepts(spanclass spanClass) bool {
+	r := fileRegion
+	if r == nil || !r.enabled {
+		return false
+	}
+	sc := spanclass.sizeclass()
+	if sc == 0 {
+		return true
+	}
+	return uintptr(class_to_size[sc]) > r.minSize
 }
 
 // setup reserves an arena-aligned region, creates (or opens) the backing file
@@ -382,6 +407,7 @@ type noscanFileConfig struct {
 	path    string
 	size    uintptr
 	pageout bool
+	minSize uintptr
 	ok      bool
 }
 
@@ -394,6 +420,7 @@ func parseNoscanFileConfig() noscanFileConfig {
 		gogetenv("GONOSCANFILE"),
 		gogetenv("GONOSCANFILESIZE"),
 		gogetenv("GONOSCANPAGEOUT"),
+		gogetenv("GONOSCANFILEMIN"),
 	)
 }
 
@@ -414,6 +441,7 @@ func noscanFileRegionInit() {
 		return
 	}
 	r.pageout = cfg.pageout
+	r.minSize = cfg.minSize
 	setFileRegion(r)
 }
 
@@ -421,7 +449,7 @@ func noscanFileRegionInit() {
 // and pageoutStr values (typically obtained from the environment). It is split
 // out so that the parsing logic can be tested without manipulating the process
 // environment.
-func noscanFileConfigFromEnv(path, sizeStr, pageoutStr string) noscanFileConfig {
+func noscanFileConfigFromEnv(path, sizeStr, pageoutStr, minSizeStr string) noscanFileConfig {
 	if path == "" || sizeStr == "" {
 		return noscanFileConfig{}
 	}
@@ -436,7 +464,13 @@ func noscanFileConfigFromEnv(path, sizeStr, pageoutStr string) noscanFileConfig 
 			pageout = false
 		}
 	}
-	return noscanFileConfig{path: path, size: size, pageout: pageout, ok: true}
+	minSize := defaultNoscanFileMinSize
+	if minSizeStr != "" {
+		if ms, ok := parseMemSize(minSizeStr); ok {
+			minSize = ms
+		}
+	}
+	return noscanFileConfig{path: path, size: size, pageout: pageout, minSize: minSize, ok: true}
 }
 
 // parseMemSize parses a non-negative size with an optional binary suffix

@@ -50,9 +50,11 @@ arenas — is unaffected and continues to come from the regular heap.
 
 Routing happens at the single span chokepoint `mheap.alloc`, which is reached
 only when a span is grown (once per span, amortized over 128–1024 object
-allocations), not on every allocation. Region spans are preferred for noscan
-span growth; when the region is exhausted, allocation falls back to the regular
-heap transparently.
+allocations), not on every allocation. When the region is enabled,
+`noscanFileRegionAccepts` checks that the span class is noscan **and** that the
+per-object size exceeds the configured minimum (`GONOSCANFILEMIN`, default 0).
+Region spans are then preferred for noscan span growth; when the region is
+exhausted, allocation falls back to the regular heap transparently.
 
 > **Caveat (writeback churn).** Small and tiny noscan objects churn frequently.
 > Because the region is file-backed, every span zero/refill touches the backing
@@ -70,6 +72,7 @@ process startup.
 |---|---|
 | `GONOSCANFILE` | Path to the backing file or block device (e.g. `/var/lib/myapp/noscan.bin`, `/dev/zram0`). Created with mode 0600 if it does not exist. |
 | `GONOSCANFILESIZE` | Size of the region in bytes, with an optional binary suffix: `K`/`KiB`/`KB` (1024), `M`/`MiB`/`MB`, `G`/`GiB`/`GB` (case-insensitive). Examples: `256MiB`, `1GB`, `536870912`. |
+| `GONOSCANFILEMIN` | Minimum per-object size (bytes, same suffix syntax) for routing to the region. Objects whose size class is at or below this threshold stay on the regular heap. Default is the compile-time constant `defaultNoscanFileMinSize` (0 = accept all). Example: `256` filters out objects ≤256 B. |
 
 Both must be set and the size must parse to a positive value. Otherwise the
 feature is disabled and the program behaves exactly as before.
@@ -106,6 +109,21 @@ GONOSCANFILE=/dev/zram0 GONOSCANFILESIZE=2GB ./myapp
 > may retain data from previous use, the region is explicitly zeroed after
 > mapping so the heap's zero-on-first-use assumption holds. Make sure the
 > configured size does not exceed the device size.
+
+### Compile-time minimum size
+
+The env var `GONOSCANFILEMIN` defaults to the compile-time constant
+`defaultNoscanFileMinSize` in `src/runtime/memfile.go` (set to 0 by default,
+meaning all noscan objects are routed). To change the default without an env
+var, edit the constant and rebuild:
+
+```go
+const defaultNoscanFileMinSize uintptr = 256 // filter <=256 B objects at build time
+```
+
+When `GONOSCANFILEMIN` is set in the environment, it overrides the
+compile-time constant. An invalid value (e.g. `lots`) is silently ignored and
+the compile-time default is used.
 
 ## 4. How it works
 
@@ -241,6 +259,8 @@ region is created; the list mainly supports tests that create several.)
 
 * `GONOSCANFILE` — path (required to enable).
 * `GONOSCANFILESIZE` — size with optional suffix (required to enable).
+* `GONOSCANFILEMIN` — minimum per-object size for routing (optional; defaults
+  to compile-time `defaultNoscanFileMinSize`, which is 0 = accept all).
 
 Size suffixes recognized (case-insensitive): none / `B`, `K`/`KB`/`KiB`,
 `M`/`MB`/`MiB`, `G`/`GB`/`GiB`. Multipliers are power-of-two (1 KiB = 1024).
@@ -262,9 +282,9 @@ non-Linux or non-amd64/arm64 builds (a build-tagged stub returns "disabled").
 | `src/runtime/memfile_test.go` | Tests (see §8). |
 | `src/runtime/export_memfile_test.go` | Exports internals to the external test package. |
 
-Key runtime functions: `noscanFileRegionInit`, `noscanFileRegionAlloc`,
-`noscanFileRegionFreeLocked`, `noscanFileRegion.setup`, `registerArenas`,
-`parseNoscanFileConfig`.
+Key runtime functions: `noscanFileRegionInit`, `noscanFileRegionAccepts`,
+`noscanFileRegionAlloc`, `noscanFileRegionFreeLocked`,
+`noscanFileRegion.setup`, `registerArenas`, `parseNoscanFileConfig`.
 
 ## 8. Testing
 
@@ -279,6 +299,7 @@ Key runtime functions: `noscanFileRegionInit`, `noscanFileRegionAlloc`,
 * `TestLargeNoscanReuseAfterFree` — end-to-end free→realloc.
 * `TestLargeNoscanExhaustionFallback` — transparent fallback to the heap.
 * `TestSmallNoscanAllocFromRegion` / `TestSmallNoscanSurvivesGC` — small noscan routing and GC survival.
+* `TestSmallNoscanFilteredByMinSize` — verifies that minSize threshold keeps small objects on the heap.
 * `TestTinyNoscanFromRegion` — tiny (sub-16-byte) noscan routing.
 * `TestNoscanMixedStress` — tiny/small/large together under GC.
 * `TestLargeNoscanNotScavenged` — the scavenger leaves the region resident.

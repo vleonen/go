@@ -14,9 +14,15 @@ var Ftruncate = ftruncate
 
 func ParseMemSize(s string) (uintptr, bool) { return parseMemSize(s) }
 
-func NoscanFileConfigFromEnv(path, sizeStr, pageoutStr string) (p string, size uintptr, pageout, ok bool) {
-	c := noscanFileConfigFromEnv(path, sizeStr, pageoutStr)
-	return c.path, c.size, c.pageout, c.ok
+func NoscanFileConfigFromEnv(path, sizeStr, pageoutStr, minSizeStr string) (p string, size uintptr, pageout bool, minSize uintptr, ok bool) {
+	c := noscanFileConfigFromEnv(path, sizeStr, pageoutStr, minSizeStr)
+	return c.path, c.size, c.pageout, c.minSize, c.ok
+}
+
+func SetNoscanFileMinSize(minSize uintptr) {
+	if fileRegion != nil {
+		fileRegion.minSize = minSize
+	}
 }
 
 // NoscanFileRegionSetupForTest creates a region, backs it with file at path,

@@ -12,6 +12,8 @@ package runtime
 
 func noscanFileRegionEnabled() bool { return false }
 
+func noscanFileRegionAccepts(spanclass spanClass) bool { return false }
+
 func noscanFileRegionAlloc(npages uintptr, spanclass spanClass) *mspan { return nil }
 
 func isFileRegionAddr(addr uintptr) bool { return false }

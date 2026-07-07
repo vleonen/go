@@ -116,22 +116,28 @@ func TestNoscanFileConfigFromEnv(t *testing.T) {
 		path       string
 		sizeStr    string
 		pageoutStr string
+		minSizeStr string
 		wantOk     bool
 		wantSize   uintptr
 		wantPage   bool
+		wantMin    uintptr
 	}{
-		{"both set", "/tmp/x", "16MiB", "", true, 16 << 20, true},
-		{"path missing", "", "16MiB", "", false, 0, false},
-		{"size missing", "/tmp/x", "", "", false, 0, false},
-		{"bad size", "/tmp/x", "lots", "", false, 0, false},
-		{"zero size", "/tmp/x", "0", "", false, 0, false},
-		{"pageout off", "/tmp/x", "16MiB", "0", true, 16 << 20, false},
-		{"pageout on", "/tmp/x", "16MiB", "1", true, 16 << 20, true},
-		{"pageout default", "/tmp/x", "16MiB", "", true, 16 << 20, true},
+		{"both set", "/tmp/x", "16MiB", "", "", true, 16 << 20, true, 0},
+		{"path missing", "", "16MiB", "", "", false, 0, false, 0},
+		{"size missing", "/tmp/x", "", "", "", false, 0, false, 0},
+		{"bad size", "/tmp/x", "lots", "", "", false, 0, false, 0},
+		{"zero size", "/tmp/x", "0", "", "", false, 0, false, 0},
+		{"pageout off", "/tmp/x", "16MiB", "0", "", true, 16 << 20, false, 0},
+		{"pageout on", "/tmp/x", "16MiB", "1", "", true, 16 << 20, true, 0},
+		{"pageout default", "/tmp/x", "16MiB", "", "", true, 16 << 20, true, 0},
+		{"min 256", "/tmp/x", "16MiB", "", "256", true, 16 << 20, true, 256},
+		{"min 1KiB", "/tmp/x", "16MiB", "", "1KiB", true, 16 << 20, true, 1024},
+		{"min bad", "/tmp/x", "16MiB", "", "lots", true, 16 << 20, true, 0},
+		{"min zero", "/tmp/x", "16MiB", "", "0", true, 16 << 20, true, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p, size, pageout, ok := runtime.NoscanFileConfigFromEnv(tc.path, tc.sizeStr, tc.pageoutStr)
+			p, size, pageout, minSize, ok := runtime.NoscanFileConfigFromEnv(tc.path, tc.sizeStr, tc.pageoutStr, tc.minSizeStr)
 			if ok != tc.wantOk {
 				t.Fatalf("ok = %v, want %v (path=%q)", ok, tc.wantOk, p)
 			}
@@ -144,6 +150,9 @@ func TestNoscanFileConfigFromEnv(t *testing.T) {
 				}
 				if pageout != tc.wantPage {
 					t.Errorf("pageout = %v, want %v", pageout, tc.wantPage)
+				}
+				if minSize != tc.wantMin {
+					t.Errorf("minSize = %v, want %v", minSize, tc.wantMin)
 				}
 			}
 		})
@@ -536,6 +545,41 @@ func TestSmallNoscanSurvivesGC(t *testing.T) {
 	}
 
 	region = nil
+	runtime.GC()
+	runtime.GC()
+}
+
+// TestSmallNoscanFilteredByMinSize verifies that when the region's minSize
+// threshold is set, small noscan objects whose size class does not exceed the
+// threshold are allocated from the regular heap, while large noscan objects
+// still use the region.
+func TestSmallNoscanFilteredByMinSize(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+	runtime.SetNoscanFileMinSize(256)
+
+	// Small 32-byte objects should NOT land in the region.
+	const n = 50000
+	live := make([][]byte, 0, n)
+	inRegion := 0
+	for i := 0; i < n; i++ {
+		b := make([]byte, 32)
+		live = append(live, b)
+		if p := uintptr(unsafe.Pointer(&b[0])); p >= lo && p < hi {
+			inRegion++
+		}
+	}
+	if inRegion > 0 {
+		t.Fatalf("%d/%d small (32 B) allocations leaked into region despite minSize=256", inRegion, n)
+	}
+	t.Logf("0/%d small (32 B) allocations in region (correctly filtered)", n)
+
+	// Large allocations must still go to the region.
+	big := make([]byte, 1<<20)
+	if p := uintptr(unsafe.Pointer(&big[0])); p < lo || p >= hi {
+		t.Fatalf("large (1 MiB) allocation %x not in region [%x, %x)", p, lo, hi)
+	}
+
+	live = nil
 	runtime.GC()
 	runtime.GC()
 }
