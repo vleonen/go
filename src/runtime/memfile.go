@@ -54,6 +54,9 @@ type noscanFileRegion struct {
 	fd int32
 	// enabled reports whether the region is mapped and ready to serve spans.
 	enabled bool
+	// pageout controls whether live span pages are proactively evicted to
+	// the backing store (via madvise(MADV_PAGEOUT)) after each GC sweep.
+	pageout bool
 
 	// lock guards pages, the dedicated page allocator for this region. It is
 	// also passed to pages.init as the page allocator's mheapLock.
@@ -349,18 +352,49 @@ func noscanFileRegionFreeLocked(s *mspan, typ spanAllocType) {
 	h.freeMSpanLocked(s)
 }
 
+// pageoutFileRegion evicts all live noscan span pages from the file region's
+// page cache by calling madvise(MADV_PAGEOUT). After this call, the data
+// lives only in compressed form in the backing store (e.g. zram).
+//
+// This is called from the background sweep goroutine after sweep completion,
+// so it runs concurrently with mutator goroutines. The heap lock is held only
+// to safely iterate allspans.
+func pageoutFileRegion() {
+	r := fileRegion
+	if r == nil || !r.enabled || !r.pageout {
+		return
+	}
+	lock(&mheap_.lock)
+	for _, s := range mheap_.allspans {
+		if s.state.get() != mSpanInUse {
+			continue
+		}
+		if !isFileRegionAddr(s.base()) {
+			continue
+		}
+		madvise(unsafe.Pointer(s.base()), s.npages*pageSize, _MADV_PAGEOUT)
+	}
+	unlock(&mheap_.lock)
+}
+
 // noscanFileConfig holds the parsed GONOSCANFILE configuration.
 type noscanFileConfig struct {
-	path string
-	size uintptr
-	ok   bool
+	path    string
+	size    uintptr
+	pageout bool
+	ok      bool
 }
 
 // parseNoscanFileConfig reads GONOSCANFILE and GONOSCANFILESIZE from the
 // environment. The feature is considered enabled only when both are set and
-// the size parses to a positive value.
+// the size parses to a positive value. GONOSCANPAGEOUT may be set to "0" to
+// disable proactive page eviction; it defaults to enabled.
 func parseNoscanFileConfig() noscanFileConfig {
-	return noscanFileConfigFromEnv(gogetenv("GONOSCANFILE"), gogetenv("GONOSCANFILESIZE"))
+	return noscanFileConfigFromEnv(
+		gogetenv("GONOSCANFILE"),
+		gogetenv("GONOSCANFILESIZE"),
+		gogetenv("GONOSCANPAGEOUT"),
+	)
 }
 
 // noscanFileRegionInit sets up the file-backed noscan region at startup, if
@@ -379,14 +413,15 @@ func noscanFileRegionInit() {
 		print("runtime: ", msg, "\n")
 		return
 	}
+	r.pageout = cfg.pageout
 	setFileRegion(r)
 }
 
-// noscanFileConfigFromEnv derives the configuration from the path and sizeStr
-// values (typically obtained from the environment). It is split out so that
-// the parsing logic can be tested without manipulating the process
+// noscanFileConfigFromEnv derives the configuration from the path, sizeStr,
+// and pageoutStr values (typically obtained from the environment). It is split
+// out so that the parsing logic can be tested without manipulating the process
 // environment.
-func noscanFileConfigFromEnv(path, sizeStr string) noscanFileConfig {
+func noscanFileConfigFromEnv(path, sizeStr, pageoutStr string) noscanFileConfig {
 	if path == "" || sizeStr == "" {
 		return noscanFileConfig{}
 	}
@@ -394,7 +429,14 @@ func noscanFileConfigFromEnv(path, sizeStr string) noscanFileConfig {
 	if !ok || size == 0 {
 		return noscanFileConfig{}
 	}
-	return noscanFileConfig{path: path, size: size, ok: true}
+	pageout := true
+	if pageoutStr != "" {
+		switch pageoutStr {
+		case "0", "off", "false", "False", "FALSE":
+			pageout = false
+		}
+	}
+	return noscanFileConfig{path: path, size: size, pageout: pageout, ok: true}
 }
 
 // parseMemSize parses a non-negative size with an optional binary suffix

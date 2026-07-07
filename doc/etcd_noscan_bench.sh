@@ -18,7 +18,7 @@
 #   --conns N          gRPC connections            (default: 100)
 #   --clients N        gRPC clients                (default: 500)
 #   --skip-build       Use existing binaries       (skip build step)
-#   --only CONFIG      Run only one config         (baseline|noscan)
+#   --only CONFIG      Run only one config         (baseline|noscan|pageout)
 #   -h, --help         Show this help
 #
 # Prerequisites:
@@ -269,10 +269,10 @@ if [[ "$ONLY" == "" || "$ONLY" == "baseline" ]]; then
     --total=10000 --key-space-size=1000
 fi
 
-# --- Noscan ---
+# --- Noscan (no pageout) ---
 if [[ "$ONLY" == "" || "$ONLY" == "noscan" ]]; then
-  export NOSCAN_ENV="GONOSCANFILE=$DEVICE GONOSCANFILESIZE=$REGION_SIZE"
-  log "=== NOSCAN ($DEVICE, $REGION_SIZE) ==="
+  export NOSCAN_ENV="GONOSCANFILE=$DEVICE GONOSCANFILESIZE=$REGION_SIZE GONOSCANPAGEOUT=0"
+  log "=== NOSCAN ($DEVICE, $REGION_SIZE, pageout=off) ==="
 
   run_bench noscan_put_small  "Put 8B val (noscan)" \
     $BENCH_ARGS put --key-size=8 --val-size=8 \
@@ -289,6 +289,30 @@ if [[ "$ONLY" == "" || "$ONLY" == "noscan" ]]; then
   run_range noscan_range
 
   run_bench noscan_txn_mixed  "Txn-mixed (noscan)" \
+    $BENCH_ARGS txn-mixed aa --key-size=8 --val-size=256 \
+    --total=10000 --key-space-size=1000
+fi
+
+# --- Noscan + pageout ---
+if [[ "$ONLY" == "" || "$ONLY" == "pageout" ]]; then
+  export NOSCAN_ENV="GONOSCANFILE=$DEVICE GONOSCANFILESIZE=$REGION_SIZE"
+  log "=== NOSCAN+PAGEOUT ($DEVICE, $REGION_SIZE, pageout=on) ==="
+
+  run_bench pgout_put_small  "Put 8B val (pageout)" \
+    $BENCH_ARGS put --key-size=8 --val-size=8 \
+    --total=100000 --key-space-size=100000 --sequential-keys
+
+  run_bench pgout_put_medium "Put 256B val (pageout)" \
+    $BENCH_ARGS put --key-size=8 --val-size=256 \
+    --total=100000 --key-space-size=100000 --sequential-keys
+
+  run_bench pgout_put_large  "Put 4KB val (pageout)" \
+    $BENCH_ARGS put --key-size=8 --val-size=4096 \
+    --total=10000 --key-space-size=10000 --sequential-keys
+
+  run_range pgout_range
+
+  run_bench pgout_txn_mixed  "Txn-mixed (pageout)" \
     $BENCH_ARGS txn-mixed aa --key-size=8 --val-size=256 \
     --total=10000 --key-space-size=1000
 fi
@@ -311,7 +335,9 @@ SUMMARY="$RESULTS/summary.txt"
   for label in base_put_small base_put_medium base_put_large \
                base_range base_txn_mixed \
                noscan_put_small noscan_put_medium noscan_put_large \
-               noscan_range noscan_txn_mixed; do
+               noscan_range noscan_txn_mixed \
+               pgout_put_small pgout_put_medium pgout_put_large \
+               pgout_range pgout_txn_mixed; do
     bench_file="$RESULTS/${label}_bench.txt"
     metrics_file="$RESULTS/${label}_metrics.txt"
     [[ -f "$bench_file" && -f "$metrics_file" ]] || continue

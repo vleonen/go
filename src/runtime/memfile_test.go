@@ -112,21 +112,26 @@ func TestParseMemSize(t *testing.T) {
 // TestNoscanFileConfigFromEnv checks the configuration derivation logic.
 func TestNoscanFileConfigFromEnv(t *testing.T) {
 	tests := []struct {
-		name     string
-		path     string
-		sizeStr  string
-		wantOk   bool
-		wantSize uintptr
+		name       string
+		path       string
+		sizeStr    string
+		pageoutStr string
+		wantOk     bool
+		wantSize   uintptr
+		wantPage   bool
 	}{
-		{"both set", "/tmp/x", "16MiB", true, 16 << 20},
-		{"path missing", "", "16MiB", false, 0},
-		{"size missing", "/tmp/x", "", false, 0},
-		{"bad size", "/tmp/x", "lots", false, 0},
-		{"zero size", "/tmp/x", "0", false, 0},
+		{"both set", "/tmp/x", "16MiB", "", true, 16 << 20, true},
+		{"path missing", "", "16MiB", "", false, 0, false},
+		{"size missing", "/tmp/x", "", "", false, 0, false},
+		{"bad size", "/tmp/x", "lots", "", false, 0, false},
+		{"zero size", "/tmp/x", "0", "", false, 0, false},
+		{"pageout off", "/tmp/x", "16MiB", "0", true, 16 << 20, false},
+		{"pageout on", "/tmp/x", "16MiB", "1", true, 16 << 20, true},
+		{"pageout default", "/tmp/x", "16MiB", "", true, 16 << 20, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p, size, ok := runtime.NoscanFileConfigFromEnv(tc.path, tc.sizeStr)
+			p, size, pageout, ok := runtime.NoscanFileConfigFromEnv(tc.path, tc.sizeStr, tc.pageoutStr)
 			if ok != tc.wantOk {
 				t.Fatalf("ok = %v, want %v (path=%q)", ok, tc.wantOk, p)
 			}
@@ -136,6 +141,9 @@ func TestNoscanFileConfigFromEnv(t *testing.T) {
 				}
 				if size != tc.wantSize {
 					t.Errorf("size = %v, want %v", size, tc.wantSize)
+				}
+				if pageout != tc.wantPage {
+					t.Errorf("pageout = %v, want %v", pageout, tc.wantPage)
 				}
 			}
 		})

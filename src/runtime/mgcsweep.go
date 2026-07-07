@@ -304,6 +304,14 @@ func bgsweep(c chan int) {
 			// N.B. freeSomeWbufs is already batched internally.
 			goschedIfBusy()
 		}
+		if isSweepDone() {
+			// Sweep is complete. Evict live noscan region pages from the
+			// page cache so they are compressed by the backing store
+			// (e.g. zram). This reduces actual physical memory usage
+			// between GC cycles. Done before acquiring sweep.lock to
+			// avoid holding it during madvise.
+			pageoutFileRegion()
+		}
 		lock(&sweep.lock)
 		if !isSweepDone() {
 			// This can happen if a GC runs between

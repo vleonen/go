@@ -19,3 +19,5 @@ func isFileRegionAddr(addr uintptr) bool { return false }
 func noscanFileRegionFreeLocked(s *mspan, typ spanAllocType) {}
 
 func noscanFileRegionInit() {}
+
+func pageoutFileRegion() {}
