@@ -69,31 +69,31 @@ unique keys (`--sequential-keys`, `--key-space-size` = `--total`).
 
 | Scenario | Baseline (req/s) | Noscan (req/s) | Delta |
 |---|---|---|---|
-| Put 8 B | 28 403 | 27 999 | −1.4 % |
-| Put 256 B | 28 238 | 27 552 | −2.4 % |
-| Put 4 KB | 19 182 | 18 902 | −1.5 % |
-| Range | 44 013 | 44 342 | +0.7 % |
-| Txn-mixed | 479 | 478 | −0.1 % |
+| Put 8 B | 28 077 | 28 133 | +0.2 % |
+| Put 256 B | 27 687 | 28 032 | +1.2 % |
+| Put 4 KB | 17 413 | 17 409 | −0.0 % |
+| Range | 43 506 | 43 862 | +0.8 % |
+| Txn-mixed | 451 | 458 | +1.6 % |
 
 ### 3.2 Latency (p50 / p99)
 
 | Scenario | Baseline p50 | Noscan p50 | Baseline p99 | Noscan p99 |
 |---|---|---|---|---|
-| Put 8 B | 15.9 ms | 16.2 ms | 33.9 ms | 33.4 ms |
-| Put 256 B | 16.1 ms | 16.3 ms | 35.1 ms | 34.7 ms |
-| Put 4 KB | 22.6 ms | 22.5 ms | 51.7 ms | 44.0 ms |
-| Range | 9.3 ms | 9.3 ms | 29.0 ms | 28.9 ms |
-| Txn-mixed | 1055.2 ms | 1069.5 ms | 1882.2 ms | 1905.1 ms |
+| Put 8 B | 15.9 ms | 16.2 ms | 34.4 ms | 33.2 ms |
+| Put 256 B | 16.5 ms | 16.1 ms | 34.2 ms | 33.9 ms |
+| Put 4 KB | 24.2 ms | 24.3 ms | 64.5 ms | 79.4 ms |
+| Range | 9.7 ms | 9.4 ms | 30.6 ms | 32.2 ms |
+| Txn-mixed | 1166.6 ms | 1129.3 ms | 1977.0 ms | 1961.2 ms |
 
 ### 3.3 Memory — VmRSS
 
 | Scenario | Baseline RSS (kB) | Noscan RSS (kB) | Baseline ΔRSS | Noscan ΔRSS |
 |---|---|---|---|---|
-| Put 8 B | 119 868 | 221 344 | +91 204 | +63 144 |
-| Put 256 B | 162 560 | 232 424 | +133 888 | +73 704 |
-| Put 4 KB | 178 336 | 187 352 | +149 504 | +29 280 |
-| Range | 72 088 | 185 952 | +3 596 | +2 484 |
-| Txn-mixed | 390 376 | 342 140 | +362 032 | +182 400 |
+| Put 8 B | 115 056 | 219 988 | +85 872 | +61 652 |
+| Put 256 B | 160 340 | 244 364 | +132 456 | +85 776 |
+| Put 4 KB | 169 944 | 187 740 | +141 440 | +29 280 |
+| Range | 73 500 | 181 412 | +1 180 | −2 152 |
+| Txn-mixed | 398 144 | 376 844 | +369 788 | +218 256 |
 
 > **ΔRSS** = `rss_after − rss_before` (growth during the benchmark).
 
@@ -104,60 +104,64 @@ is a fixed overhead independent of the workload.
 ### 3.4 zram compressed memory (mm\_stat `mem_used_total`)
 
 zram memory usage is cumulative across noscan runs (the device is not reset
-between scenarios). Values below are the mm\_stat reading **after** each run:
+between scenarios). Each noscan scenario starts a fresh etcd process that
+re-zeroes the region, so zram recompresses. Values below are the mm\_stat
+reading **after** each run:
 
-| Scenario | mm\_stat after (bytes) | Incremental Δ |
-|---|---|---|
-| (region zeroed at startup) | 16 384 | — |
-| Put 8 B | 16 384 | 0 |
-| Put 256 B | 2 473 984 | +2.4 MB |
-| Put 4 KB | 6 324 224 | +3.7 MB |
-| Range | 97 509 376 | +87.5 MB |
-| Txn-mixed | 2 330 624 | *reset to fresh region* |
+| Scenario | mm\_stat after (bytes) |
+|---|---|
+| Put 8 B | 12 840 960 |
+| Put 256 B | 3 506 176 |
+| Put 4 KB | 6 643 712 |
+| Range | 105 656 320 |
+| Txn-mixed | 2 367 488 |
 
-> The txn-mixed run's lower value reflects a fresh region zero (new etcd
-> process), which overwrites prior content with zeros; zram recompresses
-> the all-zero pages to a small footprint.
+> The values fluctuate because each fresh etcd process re-zeroes the 128 MiB
+> region (overwriting prior content with zeros), and zram recompresses the
+> all-zero pages to a small footprint. The Range scenario shows the highest
+> value because the preload phase populates many keys in the region before
+> the read benchmark runs.
 
 ## 4. Analysis
 
-### 4.1 Performance: throughput neutral, tail latency improved
+### 4.1 Performance: throughput neutral, tail latency within noise
 
-With a 128 MiB region, throughput differences are within noise (±2 % across
-all scenarios). The noscan configuration neither helps nor hurts overall
-throughput at this region size.
+Throughput differences are within ±2 % across all scenarios — the noscan
+configuration neither helps nor hurts overall throughput at the 128 MiB
+region size.
 
-However, tail latency shows a consistent improvement for larger value sizes.
-The Put 4 KB scenario shows the largest p99 reduction: **51.7 ms → 44.0 ms
-(−15 %)**. This is because 4 KB value backing arrays are large noscan
-objects; routing them to the region removes them from the GC's scan and
-mark work, reducing pause-time contention.
+Tail-latency results are mixed: Put 8 B (p99 34.4 → 33.2 ms) and Txn-mixed
+(p99 1977 → 1961 ms) show slight improvement, while Put 4 KB regresses
+(p99 64.5 → 79.4 ms). Given that each scenario was run only once, these
+differences are within the expected run-to-run variance. No consistent
+latency improvement or degradation is observable at this region size.
 
 ### 4.2 Heap growth: noscan lowers incremental memory
 
 Comparing ΔRSS (the growth during the benchmark), the noscan configuration
-uses **significantly less incremental heap**:
+uses **significantly less incremental heap** for write-heavy scenarios:
 
 | Scenario | Baseline ΔRSS | Noscan ΔRSS | Savings |
 |---|---|---|---|
-| Put 8 B | 91.2 MB | 63.1 MB | 28.1 MB (31 %) |
-| Put 256 B | 133.9 MB | 73.7 MB | 60.2 MB (45 %) |
-| Put 4 KB | 149.5 MB | 29.3 MB | 120.2 MB (80 %) |
-| Txn-mixed | 362.0 MB | 182.4 MB | 179.6 MB (50 %) |
+| Put 8 B | 85.9 MB | 61.7 MB | 24.2 MB (28 %) |
+| Put 256 B | 132.5 MB | 85.8 MB | 46.7 MB (35 %) |
+| Put 4 KB | 141.4 MB | 29.3 MB | 112.2 MB (79 %) |
+| Txn-mixed | 369.8 MB | 218.3 MB | 151.5 MB (41 %) |
 
 Noscan objects (byte-slice keys, revision arrays, value buffers) that would
 normally inflate the GC heap are instead served from the zram-backed region.
-The savings scale with value size and write volume.
+The savings scale with value size and write volume. The Range scenario shows
+negligible ΔRSS in both configurations (read-only workload).
 
 For the write-heavy Txn-mixed scenario, the noscan configuration's total RSS
-(342 MB) is **lower** than the baseline (390 MB): the 128 MiB region overhead
+(377 MB) is **lower** than the baseline (398 MB): the 128 MiB region overhead
 is more than offset by the heap savings.
 
 ### 4.3 Region size trade-off
 
 | Region size | Fixed RSS overhead | ΔRSS savings | Total RSS vs baseline |
 |---|---|---|---|
-| 128 MiB | ~130 MB | 28–120 MB per scenario | Comparable or lower for heavy workloads |
+| 128 MiB | ~130 MB | 24–112 MB per scenario | Comparable or lower for heavy workloads |
 | 512 MiB * | ~524 MB | Same | Higher for small workloads, lower for heavy |
 
 \* Previous benchmark run; included for reference.
@@ -172,8 +176,8 @@ workloads (e.g. Range), the overhead dominates; for write-heavy workloads
 zram with zstd effectively compresses the noscan data. The actual physical
 memory consumed by zram (mm\_stat `mem_used_total`) is a fraction of the
 logical region size. For example, after the Put 256 B scenario (100 K keys ×
-256 B values = ~25 MB of logical data), zram used only ~2.4 MB compressed —
-a **~10:1 compression ratio**.
+256 B values = ~25 MB of logical data), zram used only ~3.5 MB compressed —
+a **~7:1 compression ratio**.
 
 ## 5. Limitations of this benchmark
 
@@ -194,15 +198,16 @@ provides measurable benefits for etcd:
 
 1. **Throughput**: neutral (within ±2 %) — the feature does not introduce
    measurable overhead.
-2. **Tail latency**: up to −15 % p99 improvement (Put 4 KB: 51.7 ms →
-   44.0 ms).
-3. **Heap efficiency**: 31–80 % less incremental heap growth under load.
+2. **Tail latency**: within run-to-run noise — no consistent improvement or
+   degradation at this region size.
+3. **Heap efficiency**: 28–79 % less incremental heap growth under
+   write-heavy loads.
 4. **Total RSS**: comparable or lower for write-heavy workloads (Txn-mixed:
-   342 MB vs 390 MB baseline).
-5. **Compression**: zram achieves 10:1+ compression on noscan data.
+   377 MB vs 398 MB baseline).
+5. **Compression**: zram achieves 7:1+ compression on noscan data.
 
 The 128 MiB region size is a good fit for these workloads: the pre-zeroing
 cost is modest and the heap savings more than compensate for heavy workloads.
-The feature is viable for production use with zram, providing both latency
-gains (reduced GC pressure) and memory efficiency (transparent compression
-of pointer-free data).
+The feature is viable for production use with zram, providing memory
+efficiency (transparent compression of pointer-free data) without throughput
+or latency regression.
