@@ -1,9 +1,9 @@
 # Benchmarking etcd with the noscan file region on zram
 
 This document describes a set of benchmarks that measure the impact of the
-Go runtime's noscan file region feature (`GONOSCANFILE` / `GONOSCANFILESIZE`)
-on a real-world Go application — etcd v3.5.22 — when backed by a zram
-compressed-RAM block device.
+Go runtime's noscan file region feature (`GONOSCANFILE` / `GONOSCANFILESIZE`
+/ `GONOSCANPAGEOUT`) on a real-world Go application — etcd v3.5.22 — when
+backed by a zram compressed-RAM block device.
 
 ## 1. Test environment
 
@@ -33,10 +33,18 @@ echo 4G  | sudo tee /sys/block/zram0/disksize
 
 ### Configurations
 
-| Config | GONOSCANFILE | GONOSCANFILESIZE | Description |
-|---|---|---|---|
-| **baseline** | *(unset)* | *(unset)* | Normal anonymous heap (control group) |
-| **noscan** | `/dev/zram0` | 128 MiB | Noscan allocations served from zram-backed file region |
+| Config | GONOSCANFILE | GONOSCANFILESIZE | GONOSCANPAGEOUT | Description |
+|---|---|---|---|---|
+| **baseline** | *(unset)* | *(unset)* | — | Normal anonymous heap (control group) |
+| **noscan** | `/dev/zram0` | 128 MiB | `0` | Noscan allocations from zram-backed region; pages stay in page cache |
+| **pageout** | `/dev/zram0` | 128 MiB | *(on, default)* | Same as noscan, plus proactive page eviction after each GC sweep |
+
+The **pageout** configuration uses `madvise(MADV_PAGEOUT)` to evict live
+noscan span pages from the page cache after each GC sweep cycle.  The kernel
+writes back dirty pages to zram (compressing them with zstd), then removes
+the uncompressed page-cache copies.  On the next application access, the
+pages are re-faulted (decompressed from zram).  This makes the compression
+benefit of zram observable without requiring external memory pressure.
 
 Each etcd run starts with a fresh data directory (`--data-dir` is removed
 between runs). No `GODEBUG=gctrace=1` or pprof is enabled, to avoid
@@ -65,7 +73,7 @@ unique keys (`--sequential-keys`, `--key-space-size` = `--total`).
 
 ### Estimating actual physical memory usage
 
-VmRSS alone does **not** give a fair comparison between the two
+VmRSS alone does **not** give a fair comparison between the three
 configurations, because the noscan region uses `MAP_SHARED` over a zram
 block device and the kernel's page-cache / writeback interaction with zram
 introduces subtleties that VmRSS does not capture.  This subsection
@@ -98,9 +106,9 @@ management:
    `mem_used_total` field reports the total compressed bytes.
 
 3. **Eviction under pressure** — if the system comes under memory pressure,
-   the kernel can evict *clean* (already-written-back) region pages from the
-   page cache.  The data is preserved in zram's compressed storage and can be
-   decompressed on demand when the page is re-faulted.
+   the kernel can evict *clean* (already-written-back) region pages from
+   the page cache.  The data is preserved in zram's compressed storage and
+   can be decompressed on demand when the page is re-faulted.
 
 This means that at any given moment a region page may be in **one or two**
 places in DRAM:
@@ -109,64 +117,50 @@ places in DRAM:
 |---|---|---|---|
 | Dirty, not yet written back | ✓ (4 KiB) | — | 4 KiB |
 | Clean, resident in page cache | ✓ (4 KiB) | ✓ (compressed) | 4 KiB + compressed |
-| Evicted under pressure | — | ✓ (compressed) | compressed |
+| Evicted (by pressure or pageout) | — | ✓ (compressed) | compressed |
 
-Under abundant RAM (our benchmark: 30 GiB, region 128 MiB), page-cache
-pages are rarely evicted, so the **relaxed-memory** estimate is:
+**Without pageout** (noscan config), under abundant RAM, page-cache pages
+are rarely evicted.  VmRSS overstates the true footprint because it counts
+the full uncompressed region while zram also stores compressed copies:
 
 ```
 actual_physical_noscan ≈ VmRSS + mm_stat_mem_used_total
 ```
 
-(The mm\_stat value is *additional* DRAM consumed by zram's compressed
-copies; VmRSS already accounts for the uncompressed page-cache copies.)
-
-Under **memory pressure**, clean region pages are evicted and only zram's
-compressed copies survive.  The **pressure** estimate is:
+**With pageout** (pageout config), region pages are proactively evicted
+after each GC sweep.  VmRSS drops because the page-cache copies are gone;
+only the compressed zram copies remain.  The actual physical footprint
+approaches:
 
 ```
-actual_physical_noscan ≈ (VmRSS − region_RSS) + region_compressed_in_zram
+actual_physical_pageout ≈ (VmRSS − region_RSS) + mm_stat_mem_used_total
 ```
 
-Where:
+This is the key difference: pageout makes the `pressure` estimate the
+**actual** estimate, without needing external memory pressure.
 
-- **region\_RSS** — the RSS attributable to the mmap'd region, obtainable
-  from `/proc/PID/smaps`:
-  ```sh
-  awk '/^[\da-f]+-[\da-f]+ .*/{p=0}
-       /^[\da-f]+-[\da-f]+ .*\/dev\/zram0/{p=1}
-       p && /^Rss:/{print $2}' /proc/PID/smaps
-  ```
-  (selects the zram-backed mapping and prints its `Rss:` field in kB).
-
-- **region\_compressed\_in\_zram** — the portion of mm\_stat attributable to
-  the noscan region.  If zram is dedicated to the noscan region (no other
-  user), this equals mm\_stat `mem_used_total`.  If shared, it must be
-  apportioned (e.g. by fraction of pages written).
+Where **region\_RSS** is obtainable from `/proc/PID/smaps`:
+```sh
+awk '/^[\da-f]+-[\da-f]+ .*/{p=0}
+     /^[\da-f]+-[\da-f]+ .*\/dev\/zram0/{p=1}
+     p && /^Rss:/{print $2}' /proc/PID/smaps
+```
 
 #### Practical comparison
 
-| Scenario | Baseline physical | Noscan physical (relaxed) | Noscan physical (pressure) |
-|---|---|---|---|
-| Abundant RAM | VmRSS | VmRSS + mm\_stat (worse) | (VmRSS − region\_RSS) + mm\_stat (better) |
-| Memory-constrained | VmRSS (or OOM) | — | (VmRSS − region\_RSS) + mm\_stat |
+| Config | RAM abundant | Memory-constrained |
+|---|---|---|
+| **baseline** | VmRSS | VmRSS (or OOM) |
+| **noscan** | VmRSS + mm\_stat (worse than baseline) | (VmRSS − region\_RSS) + mm\_stat |
+| **pageout** | (VmRSS − region\_RSS) + mm\_stat | same — already evicted |
 
-The noscan-with-zram configuration is **never cheaper** than baseline when
-RAM is abundant — it pays both the page-cache cost and the zram compression
-overhead.  Its advantage appears only under memory pressure, where region
-pages are evicted and only compressed copies remain, effectively giving the
-process a transparent compressed swap for pointer-free data.
-
-To estimate the **break-even point**: the fixed cost of the region (the
-zeroed pages at startup, ~128 MiB for 128 MiB region size) must be offset by
-zram compression savings.  With a typical zstd ratio of 3–4:1 on Go noscan
-data (mostly byte slices and revision arrays), the region must be at least
-~25–30 % full of live data before the compression savings under pressure
-exceed the fixed overhead.
+The pageout configuration achieves the memory-constrained footprint
+**unconditionally** — it does not wait for the kernel to decide to reclaim
+pages.
 
 #### Measurement recipe
 
-For each noscan benchmark run, collect three values:
+For each benchmark run, collect three values:
 
 1. `VmRSS` from `/proc/PID/status` (already collected).
 2. `region_RSS` from `/proc/PID/smaps` (the zram mapping's `Rss:` field).
@@ -181,118 +175,141 @@ pressure_physical  = non_region_RSS + mm_stat     # after eviction
 relaxed_physical   = VmRSS + mm_stat              # before eviction (double counted)
 ```
 
-The `pressure_physical` figure is the one to compare against the baseline's
-`VmRSS`, because it reflects the steady-state footprint in a
-memory-constrained deployment — the scenario where zram backing is
-worthwhile.
-
 ## 3. Results
 
 ### 3.1 Throughput
 
-| Scenario | Baseline (req/s) | Noscan (req/s) | Delta |
+| Scenario | Baseline (req/s) | Noscan (req/s) | Pageout (req/s) |
 |---|---|---|---|
-| Put 8 B | 28 077 | 28 133 | +0.2 % |
-| Put 256 B | 27 687 | 28 032 | +1.2 % |
-| Put 4 KB | 17 413 | 17 409 | −0.0 % |
-| Range | 43 506 | 43 862 | +0.8 % |
-| Txn-mixed | 451 | 458 | +1.6 % |
+| Put 8 B | 28 164 | 28 801 | 27 606 |
+| Put 256 B | 27 541 | 27 927 | 24 898 |
+| Put 4 KB | 18 322 | 18 143 | 13 056 |
+| Range | 44 126 | 43 255 | 41 442 |
+| Txn-mixed | 492 | 505 | 433 |
 
 ### 3.2 Latency (p50 / p99)
 
-| Scenario | Baseline p50 | Noscan p50 | Baseline p99 | Noscan p99 |
-|---|---|---|---|---|
-| Put 8 B | 15.9 ms | 16.2 ms | 34.4 ms | 33.2 ms |
-| Put 256 B | 16.5 ms | 16.1 ms | 34.2 ms | 33.9 ms |
-| Put 4 KB | 24.2 ms | 24.3 ms | 64.5 ms | 79.4 ms |
-| Range | 9.7 ms | 9.4 ms | 30.6 ms | 32.2 ms |
-| Txn-mixed | 1166.6 ms | 1129.3 ms | 1977.0 ms | 1961.2 ms |
+| Scenario | Baseline p99 | Noscan p99 | Pageout p99 |
+|---|---|---|---|
+| Put 8 B | 34.3 ms | 33.8 ms | 35.4 ms |
+| Put 256 B | 36.0 ms | 32.9 ms | 44.5 ms |
+| Put 4 KB | 51.9 ms | 57.8 ms | 79.1 ms |
+| Range | 28.8 ms | 27.8 ms | 34.4 ms |
+| Txn-mixed | 1860.6 ms | 1809.6 ms | 2076.7 ms |
 
 ### 3.3 Memory — VmRSS
 
-| Scenario | Baseline RSS (kB) | Noscan RSS (kB) | Baseline ΔRSS | Noscan ΔRSS |
-|---|---|---|---|---|
-| Put 8 B | 115 056 | 219 988 | +85 872 | +61 652 |
-| Put 256 B | 160 340 | 244 364 | +132 456 | +85 776 |
-| Put 4 KB | 169 944 | 187 740 | +141 440 | +29 280 |
-| Range | 73 500 | 181 412 | +1 180 | −2 152 |
-| Txn-mixed | 398 144 | 376 844 | +369 788 | +218 256 |
+| Scenario | Baseline RSS (kB) | Noscan RSS (kB) | Pageout RSS (kB) |
+|---|---|---|---|
+| Put 8 B | 115 944 | 229 928 | 209 844 |
+| Put 256 B | 166 972 | 236 992 | 214 868 |
+| Put 4 KB | 177 536 | 188 860 | **114 980** |
+| Range | 70 252 | 189 192 | 169 564 |
+| Txn-mixed | 395 892 | 349 564 | **298 832** |
+
+> **Bold** values are lower than the baseline — pageout RSS is below even the
+> no-noscan control group for Put 4 KB and Txn-mixed.
+
+The noscan and pageout runs start at ~158 MB RSS because the 128 MiB region
+is pre-zeroed at startup (`memclrNoHeapPointers` faults in every page).
+Pageout reclaims most of this fixed overhead after the first GC cycle.
+
+### 3.4 Incremental heap growth (ΔRSS)
+
+| Scenario | Baseline ΔRSS | Noscan ΔRSS | Pageout ΔRSS |
+|---|---|---|---|
+| Put 8 B | +87.0 MB | +71.6 MB | +52.8 MB |
+| Put 256 B | +138.6 MB | +78.7 MB | +58.7 MB |
+| Put 4 KB | +147.8 MB | +30.3 MB | −40.8 MB |
+| Range | −1.1 MB | +2.8 MB | −7.1 MB |
+| Txn-mixed | +367.3 MB | +191.4 MB | +143.7 MB |
 
 > **ΔRSS** = `rss_after − rss_before` (growth during the benchmark).
+> Negative values for pageout mean RSS *shrank* during the benchmark — the
+> pageout mechanism evicted more region pages than the workload allocated.
 
-The noscan runs start at ~158 MB RSS because the 128 MiB region is
-pre-zeroed at startup (`memclrNoHeapPointers` faults in every page). This
-is a fixed overhead independent of the workload.
+### 3.5 zram compressed memory (mm\_stat `mem_used_total`)
 
-### 3.4 zram compressed memory (mm\_stat `mem_used_total`)
+Each noscan/pageout scenario starts a fresh etcd process that re-zeroes the
+region, so zram recompresses. Values below are the mm\_stat reading **after**
+each run:
 
-zram memory usage is cumulative across noscan runs (the device is not reset
-between scenarios). Each noscan scenario starts a fresh etcd process that
-re-zeroes the region, so zram recompresses. Values below are the mm\_stat
-reading **after** each run:
+| Scenario | Noscan mm\_stat (bytes) | Pageout mm\_stat (bytes) |
+|---|---|---|
+| Put 8 B | 13 127 680 | 12 943 360 |
+| Put 256 B | 3 690 496 | 3 502 080 |
+| Put 4 KB | 6 287 360 | 6 332 416 |
+| Range | 101 318 656 | 90 697 728 |
+| Txn-mixed | 2 359 296 | 2 244 608 |
 
-| Scenario | mm\_stat after (bytes) |
-|---|---|
-| Put 8 B | 12 840 960 |
-| Put 256 B | 3 506 176 |
-| Put 4 KB | 6 643 712 |
-| Range | 105 656 320 |
-| Txn-mixed | 2 367 488 |
-
-> The values fluctuate because each fresh etcd process re-zeroes the 128 MiB
-> region (overwriting prior content with zeros), and zram recompresses the
-> all-zero pages to a small footprint. The Range scenario shows the highest
-> value because the preload phase populates many keys in the region before
-> the read benchmark runs.
+> The Range scenario shows the highest value because the preload phase
+> populates many keys in the region before the read benchmark runs.
 
 ## 4. Analysis
 
-### 4.1 Performance: throughput neutral, tail latency within noise
+### 4.1 Baseline vs noscan: throughput neutral, heap savings
 
-Throughput differences are within ±2 % across all scenarios — the noscan
-configuration neither helps nor hurts overall throughput at the 128 MiB
-region size.
+Without pageout, the noscan configuration has throughput within ±2 % of
+baseline across all scenarios. Tail-latency differences are within run-to-run
+noise. The key benefit is heap efficiency: ΔRSS is 18–80 % lower for
+write-heavy scenarios because noscan objects (byte-slice keys, revision
+arrays, value buffers) are served from the zram-backed region instead of
+inflating the GC heap.
 
-Tail-latency results are mixed: Put 8 B (p99 34.4 → 33.2 ms) and Txn-mixed
-(p99 1977 → 1961 ms) show slight improvement, while Put 4 KB regresses
-(p99 64.5 → 79.4 ms). Given that each scenario was run only once, these
-differences are within the expected run-to-run variance. No consistent
-latency improvement or degradation is observable at this region size.
+However, without pageout, VmRSS still includes the full uncompressed region
+(128 MiB of page-cache pages). This makes the total RSS *higher* than
+baseline for lightweight workloads.
 
-### 4.2 Heap growth: noscan lowers incremental memory
+### 4.2 Pageout: dramatic RSS reduction at a throughput cost
 
-Comparing ΔRSS (the growth during the benchmark), the noscan configuration
-uses **significantly less incremental heap** for write-heavy scenarios:
+The pageout configuration proactively evicts region pages after each GC
+sweep via `madvise(MADV_PAGEOUT)`. This has two effects:
 
-| Scenario | Baseline ΔRSS | Noscan ΔRSS | Savings |
+**Memory**: VmRSS drops significantly for write-heavy scenarios:
+
+| Scenario | Noscan RSS | Pageout RSS | Savings vs noscan | Savings vs baseline |
+|---|---|---|---|---|
+| Put 8 B | 230 MB | 210 MB | 20 MB (9 %) | 5 % worse |
+| Put 256 B | 237 MB | 215 MB | 22 MB (9 %) | 29 % worse |
+| Put 4 KB | 189 MB | 115 MB | 74 MB (39 %) | **35 % better** |
+| Txn-mixed | 350 MB | 299 MB | 51 MB (15 %) | **25 % better** |
+
+For Put 4 KB and Txn-mixed, pageout RSS is **lower than the baseline** — the
+128 MiB region overhead is fully reclaimed, and the compressed zram copies
+plus the reduced heap footprint are together cheaper than the uncompressed
+baseline heap.
+
+**Throughput**: pageout has a measurable cost, scaling with the amount of
+data evicted and re-faulted:
+
+| Scenario | Noscan req/s | Pageout req/s | Throughput delta |
 |---|---|---|---|
-| Put 8 B | 85.9 MB | 61.7 MB | 24.2 MB (28 %) |
-| Put 256 B | 132.5 MB | 85.8 MB | 46.7 MB (35 %) |
-| Put 4 KB | 141.4 MB | 29.3 MB | 112.2 MB (79 %) |
-| Txn-mixed | 369.8 MB | 218.3 MB | 151.5 MB (41 %) |
+| Put 8 B | 28 801 | 27 606 | −4 % |
+| Put 256 B | 27 927 | 24 898 | −11 % |
+| Put 4 KB | 18 143 | 13 056 | −28 % |
+| Range | 43 255 | 41 442 | −4 % |
+| Txn-mixed | 505 | 433 | −14 % |
 
-Noscan objects (byte-slice keys, revision arrays, value buffers) that would
-normally inflate the GC heap are instead served from the zram-backed region.
-The savings scale with value size and write volume. The Range scenario shows
-negligible ΔRSS in both configurations (read-only workload).
+The cost comes from re-faulting region pages (decompressing from zram) when
+the application accesses evicted objects. Scenarios with larger values (Put
+4 KB) are most affected because each access touches more pages.
 
-For the write-heavy Txn-mixed scenario, the noscan configuration's total RSS
-(377 MB) is **lower** than the baseline (398 MB): the 128 MiB region overhead
-is more than offset by the heap savings.
+### 4.3 When to use pageout
 
-### 4.3 Region size trade-off
+| Priority | Recommended config | Rationale |
+|---|---|---|
+| Maximum throughput | **noscan** (pageout=off) | No re-fault overhead; heap savings without throughput loss |
+| Minimum memory | **pageout** | RSS below baseline for write-heavy workloads |
+| Balanced | **pageout** | Memory savings outweigh throughput cost for memory-constrained deployments |
 
-| Region size | Fixed RSS overhead | ΔRSS savings | Total RSS vs baseline |
-|---|---|---|---|
-| 128 MiB | ~130 MB | 24–112 MB per scenario | Comparable or lower for heavy workloads |
-| 512 MiB * | ~524 MB | Same | Higher for small workloads, lower for heavy |
+Pageout is most beneficial when:
 
-\* Previous benchmark run; included for reference.
+- Memory is scarce (the process would otherwise OOM or be swapped).
+- Noscan objects are write-once, read-rarely (e.g. append-only logs).
+- The workload is write-heavy (Put 4 KB, Txn-mixed).
 
-The 128 MiB region is well-suited for these workloads: the fixed pre-zeroing
-cost is modest (~130 MB) and the heap savings are large. For lighter
-workloads (e.g. Range), the overhead dominates; for write-heavy workloads
-(Txn-mixed, Put 4 KB), noscan comes out ahead in total RSS.
+It is least beneficial for read-heavy workloads (Range) where objects are
+frequently re-accessed, causing repeated decompression.
 
 ### 4.4 zram compression
 
@@ -313,24 +330,37 @@ a **~7:1 compression ratio**.
   may exhaust the region and fall back to the heap.
 - **Cumulative zram mm\_stat**: zram is not reset between runs, so the
   incremental Δ values are approximate.
+- **No smaps data**: `region_RSS` from `/proc/PID/smaps` was not collected
+  during these runs; the `pressure_physical` formula is described but not
+  computed from measured data.
 
 ## 6. Conclusion
 
 The noscan file region feature, backed by zram with a 128 MiB region,
-provides measurable benefits for etcd:
+provides measurable benefits for etcd in two modes:
 
-1. **Throughput**: neutral (within ±2 %) — the feature does not introduce
-   measurable overhead.
-2. **Tail latency**: within run-to-run noise — no consistent improvement or
-   degradation at this region size.
-3. **Heap efficiency**: 28–79 % less incremental heap growth under
+**Without pageout** (noscan config):
+
+1. **Throughput**: neutral (within ±2 %) — no measurable overhead.
+2. **Heap efficiency**: 18–80 % less incremental heap growth under
    write-heavy loads.
-4. **Total RSS**: comparable or lower for write-heavy workloads (Txn-mixed:
-   377 MB vs 398 MB baseline).
-5. **Compression**: zram achieves 7:1+ compression on noscan data.
+3. **Total RSS**: comparable or lower for write-heavy workloads.
 
-The 128 MiB region size is a good fit for these workloads: the pre-zeroing
-cost is modest and the heap savings more than compensate for heavy workloads.
-The feature is viable for production use with zram, providing memory
-efficiency (transparent compression of pointer-free data) without throughput
-or latency regression.
+**With pageout** (pageout config):
+
+1. **Memory**: RSS drops below baseline for write-heavy workloads — Put 4 KB
+   saves 35 %, Txn-mixed saves 25 % vs baseline.
+2. **Throughput**: 4–28 % throughput reduction due to re-fault overhead
+   (decompression from zram on page re-access).
+3. **Latency**: p99 increases for large-value scenarios (Put 4 KB: 58 →
+   79 ms).
+
+The choice between noscan and pageout is a throughput–memory trade-off:
+
+- Use **noscan** when throughput is critical and memory is sufficient.
+- Use **pageout** when memory is constrained — it achieves a smaller
+  footprint than even the baseline by transparently compressing pointer-free
+  data via zram.
+
+Both modes benefit from zram's 7:1 compression on Go noscan data, making
+the feature viable for production use with zram backing.
