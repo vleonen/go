@@ -63,6 +63,129 @@ unique keys (`--sequential-keys`, `--key-space-size` = `--total`).
 - **VmHWM**: high-water-mark RSS.
 - **zram mm\_stat field 3** (`mem_used_total`): compressed bytes stored by zram.
 
+### Estimating actual physical memory usage
+
+VmRSS alone does **not** give a fair comparison between the two
+configurations, because the noscan region uses `MAP_SHARED` over a zram
+block device and the kernel's page-cache / writeback interaction with zram
+introduces subtleties that VmRSS does not capture.  This subsection
+describes how to estimate true DRAM consumption for each configuration.
+
+#### Baseline (anonymous heap)
+
+This is the straightforward case.  Every resident heap page is a private
+anonymous page occupying 4 KiB of DRAM, so:
+
+```
+actual_physical_baseline = VmRSS
+```
+
+No further adjustment is needed.
+
+#### Noscan with zram (MAP\_SHARED block-device mmap)
+
+The runtime mmaps the zram device with `MAP_SHARED` (see `memfile.go:169`).
+A page touched in this region passes through three layers of kernel memory
+management:
+
+1. **Page cache** — the faulted-in page lives in the block device's address
+   space and is counted in the process's VmRSS as a file-backed resident
+   page (uncompressed, 4 KiB).
+
+2. **Dirty writeback** — when the kernel's writeback path eventually flushes
+   a dirty page to the zram driver, zram compresses the 4 KiB page (with
+   zstd) and stores the compressed form in its internal pool.  The mm\_stat
+   `mem_used_total` field reports the total compressed bytes.
+
+3. **Eviction under pressure** — if the system comes under memory pressure,
+   the kernel can evict *clean* (already-written-back) region pages from the
+   page cache.  The data is preserved in zram's compressed storage and can be
+   decompressed on demand when the page is re-faulted.
+
+This means that at any given moment a region page may be in **one or two**
+places in DRAM:
+
+| State | Page cache (in VmRSS) | zram compressed (in mm\_stat) | Total DRAM |
+|---|---|---|---|
+| Dirty, not yet written back | ✓ (4 KiB) | — | 4 KiB |
+| Clean, resident in page cache | ✓ (4 KiB) | ✓ (compressed) | 4 KiB + compressed |
+| Evicted under pressure | — | ✓ (compressed) | compressed |
+
+Under abundant RAM (our benchmark: 30 GiB, region 128 MiB), page-cache
+pages are rarely evicted, so the **relaxed-memory** estimate is:
+
+```
+actual_physical_noscan ≈ VmRSS + mm_stat_mem_used_total
+```
+
+(The mm\_stat value is *additional* DRAM consumed by zram's compressed
+copies; VmRSS already accounts for the uncompressed page-cache copies.)
+
+Under **memory pressure**, clean region pages are evicted and only zram's
+compressed copies survive.  The **pressure** estimate is:
+
+```
+actual_physical_noscan ≈ (VmRSS − region_RSS) + region_compressed_in_zram
+```
+
+Where:
+
+- **region\_RSS** — the RSS attributable to the mmap'd region, obtainable
+  from `/proc/PID/smaps`:
+  ```sh
+  awk '/^[\da-f]+-[\da-f]+ .*/{p=0}
+       /^[\da-f]+-[\da-f]+ .*\/dev\/zram0/{p=1}
+       p && /^Rss:/{print $2}' /proc/PID/smaps
+  ```
+  (selects the zram-backed mapping and prints its `Rss:` field in kB).
+
+- **region\_compressed\_in\_zram** — the portion of mm\_stat attributable to
+  the noscan region.  If zram is dedicated to the noscan region (no other
+  user), this equals mm\_stat `mem_used_total`.  If shared, it must be
+  apportioned (e.g. by fraction of pages written).
+
+#### Practical comparison
+
+| Scenario | Baseline physical | Noscan physical (relaxed) | Noscan physical (pressure) |
+|---|---|---|---|
+| Abundant RAM | VmRSS | VmRSS + mm\_stat (worse) | (VmRSS − region\_RSS) + mm\_stat (better) |
+| Memory-constrained | VmRSS (or OOM) | — | (VmRSS − region\_RSS) + mm\_stat |
+
+The noscan-with-zram configuration is **never cheaper** than baseline when
+RAM is abundant — it pays both the page-cache cost and the zram compression
+overhead.  Its advantage appears only under memory pressure, where region
+pages are evicted and only compressed copies remain, effectively giving the
+process a transparent compressed swap for pointer-free data.
+
+To estimate the **break-even point**: the fixed cost of the region (the
+zeroed pages at startup, ~128 MiB for 128 MiB region size) must be offset by
+zram compression savings.  With a typical zstd ratio of 3–4:1 on Go noscan
+data (mostly byte slices and revision arrays), the region must be at least
+~25–30 % full of live data before the compression savings under pressure
+exceed the fixed overhead.
+
+#### Measurement recipe
+
+For each noscan benchmark run, collect three values:
+
+1. `VmRSS` from `/proc/PID/status` (already collected).
+2. `region_RSS` from `/proc/PID/smaps` (the zram mapping's `Rss:` field).
+3. `mm_stat_mem_used_total` from
+   `/sys/block/zram0/mm_stat` field 3 (already collected).
+
+Then compute:
+
+```
+non_region_RSS     = VmRSS − region_RSS           # heap + stacks + metadata
+pressure_physical  = non_region_RSS + mm_stat     # after eviction
+relaxed_physical   = VmRSS + mm_stat              # before eviction (double counted)
+```
+
+The `pressure_physical` figure is the one to compare against the baseline's
+`VmRSS`, because it reflects the steady-state footprint in a
+memory-constrained deployment — the scenario where zram backing is
+worthwhile.
+
 ## 3. Results
 
 ### 3.1 Throughput
