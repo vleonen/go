@@ -196,6 +196,11 @@ a file region (`isFileRegionAddr`) and calls `noscanFileRegionFreeLocked`, which
 
 * mirrors the `spanAllocHeap` accounting that allocation performed
   (`pagesInUse--`, `heapInUse--`, `inHeap--`, clears the `pageInUse` bit);
+* if pageout is enabled, **zeroes and evicts** the freed pages
+  (`memclrNoHeapPointers` + `madvise(MADV_PAGEOUT)`) so that zram compresses
+  them to near-nothing (zero pages compress to ~40 bytes per 4 KiB with
+  zstd). On re-allocation the pages are re-faulted from zram and arrive as
+  clean zeros;
 * returns the pages to the **region's** page allocator (`pages.free`) instead of
   the heap's; and
 * intentionally skips the heap's scavenge stats (`heapFree`/`heapReleased`) and
@@ -300,6 +305,7 @@ Key runtime functions: `noscanFileRegionInit`, `noscanFileRegionAccepts`,
 * `TestLargeNoscanExhaustionFallback` — transparent fallback to the heap.
 * `TestSmallNoscanAllocFromRegion` / `TestSmallNoscanSurvivesGC` — small noscan routing and GC survival.
 * `TestSmallNoscanFilteredByMinSize` — verifies that minSize threshold keeps small objects on the heap.
+* `TestFreeRegionZeroAndPageout` — verifies that freed region pages are zeroed and evicted.
 * `TestTinyNoscanFromRegion` — tiny (sub-16-byte) noscan routing.
 * `TestNoscanMixedStress` — tiny/small/large together under GC.
 * `TestLargeNoscanNotScavenged` — the scavenger leaves the region resident.

@@ -25,6 +25,12 @@ func SetNoscanFileMinSize(minSize uintptr) {
 	}
 }
 
+func SetNoscanFilePageout(on bool) {
+	if fileRegion != nil {
+		fileRegion.pageout = on
+	}
+}
+
 // NoscanFileRegionSetupForTest creates a region, backs it with file at path,
 // stores it as the process-wide fileRegion, and returns its base, fd, and size.
 func NoscanFileRegionSetupForTest(path string, size uintptr) (base unsafe.Pointer, fd int32, regionSize uintptr, errmsg string) {

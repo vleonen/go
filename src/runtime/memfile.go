@@ -370,6 +370,16 @@ func noscanFileRegionFreeLocked(s *mspan, typ spanAllocType) {
 	}
 	memstats.heapStats.release()
 
+	// Zero and evict the freed span pages so that zram compresses them
+	// to near-nothing (zero pages compress to ~40 bytes per 4 KiB with
+	// zstd).  On re-allocation the pages are re-faulted from zram and
+	// arrive as clean zeros, satisfying the needzero check without an
+	// additional memclr.
+	if r.pageout {
+		memclrNoHeapPointers(unsafe.Pointer(s.base()), s.npages*pageSize)
+		madvise(unsafe.Pointer(s.base()), s.npages*pageSize, _MADV_PAGEOUT)
+	}
+
 	// Return the pages to the owning region's allocator.
 	r.freePages(s.base(), s.npages)
 

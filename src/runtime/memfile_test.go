@@ -584,6 +584,61 @@ func TestSmallNoscanFilteredByMinSize(t *testing.T) {
 	runtime.GC()
 }
 
+// TestFreeRegionZeroAndPageout verifies that when pageout is enabled, freed
+// region span pages are zeroed and evicted. After freeing a region object
+// filled with non-zero data and running GC, a subsequent region allocation
+// must return zeroed memory (either from our free-time zeroing+eviction or
+// from the runtime's needzero check — both are correct).
+func TestFreeRegionZeroAndPageout(t *testing.T) {
+	lo, hi := setupFileRegionForTest(t, 8<<20)
+	runtime.SetNoscanFilePageout(true)
+
+	const n = 1 << 20 // 1 MiB
+	b1 := make([]byte, n)
+	p1 := uintptr(unsafe.Pointer(&b1[0]))
+	if p1 < lo || p1 >= hi {
+		t.Fatalf("alloc %x not in region [%x, %x)", p1, lo, hi)
+	}
+	for i := range b1 {
+		b1[i] = 0xFF
+	}
+
+	// Free and collect. The sweep path should zero + MADV_PAGEOUT the span.
+	b1 = nil
+	runtime.GC()
+	runtime.GC()
+
+	// Re-allocate from the region and verify the memory is zero.
+	b2 := make([]byte, n)
+	p2 := uintptr(unsafe.Pointer(&b2[0]))
+	if p2 < lo || p2 >= hi {
+		t.Fatalf("realloc %x not in region [%x, %x)", p2, lo, hi)
+	}
+	bad := 0
+	for i := range b2 {
+		if b2[i] != 0 {
+			bad++
+		}
+	}
+	if bad != 0 {
+		t.Fatalf("%d bytes non-zero after free+realloc (pageout zeroing failed)", bad)
+	}
+
+	// The re-allocated object must be usable.
+	for i := range b2 {
+		b2[i] = byte(i)
+	}
+	for i := range b2 {
+		if b2[i] != byte(i) {
+			t.Fatalf("data mismatch at %d after write", i)
+		}
+	}
+
+	b2 = nil
+	runtime.GC()
+	runtime.GC()
+}
+
 // TestTinyNoscanFromRegion verifies that tiny noscan allocations (sub-16-byte,
 // coalesced into 16-byte slots of tinySpanClass / spanClass 5) are served from
 // the file-backed region once the tiny span is grown there.
