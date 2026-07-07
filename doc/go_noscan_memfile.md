@@ -99,9 +99,12 @@ sudo chmod 0666 /dev/zram0
 GONOSCANFILE=/dev/zram0 GONOSCANFILESIZE=2GB ./myapp
 ```
 
-> Note: a regular file is `ftruncate`-d to the configured size at startup. A
-> block device cannot be truncated; current behavior requires a regular file
-> for `ftruncate` to succeed (see §8 Limitations). On a device, make sure the
+> Note: a regular file is `ftruncate`-d to the configured size at startup,
+> which guarantees zero pages. A block device cannot be truncated; when
+> `ftruncate` fails the runtime queries the device size with
+> `ioctl(BLKGETSIZE64)` and uses the device directly. Because a block device
+> may retain data from previous use, the region is explicitly zeroed after
+> mapping so the heap's zero-on-first-use assumption holds. Make sure the
 > configured size does not exceed the device size.
 
 ## 4. How it works
@@ -115,7 +118,13 @@ is still stopped (`runtime.schedinit`), `noscanFileRegionInit`:
    `sysReserveAligned` (a `PROT_NONE` anonymous reservation). The address is
    chosen by the kernel and is disjoint from the regular heap's arena hints.
 2. Creates or opens the backing file (`open(O_RDWR|O_CREAT, 0600)`) and sizes
-   it with `ftruncate`.
+   it. For a regular file, `ftruncate` extends it to the requested size (and
+   guarantees zero pages). If `ftruncate` fails (block device), the runtime
+   queries the device size with `ioctl(BLKGETSIZE64)` and uses the device
+   directly provided it is at least as large as the region; the region is then
+   explicitly zeroed with `memclrNoHeapPointers` so that the heap's
+   `allocNeedsZero` check (which assumes freshly-mapped pages are zero) remains
+   valid.
 3. Overlays the reservation with a single `MAP_SHARED|MAP_FIXED` mapping of the
    file, replacing the `PROT_NONE` placeholder at exactly the same address. The
    region is now read/write and file-backed.
@@ -243,11 +252,12 @@ non-Linux or non-amd64/arm64 builds (a build-tagged stub returns "disabled").
 
 | File | Role |
 |---|---|
-| `src/runtime/memfile.go` | Region manager, config parsing, alloc/free routing, startup init (build tag `linux && (amd64 \|\| arm64)`). |
+| `src/runtime/memfile.go` | Region manager, config parsing, alloc/free routing, startup init, `ioctl`/`blkGetSize64` for block-device sizing (build tag `linux && (amd64 \|\| arm64)`). |
 | `src/runtime/memfile_stub.go` | Disabled-feature stubs for all other platforms. |
 | `src/runtime/mheap.go` | Routing in `mheap.alloc` and `mheap.freeSpanLocked`. |
 | `src/runtime/proc.go` | Calls `noscanFileRegionInit()` from `schedinit`. |
 | `src/runtime/defs_linux_{amd64,arm64}.go` | `_MAP_SHARED`, `_O_RDWR`. |
+| `src/internal/runtime/syscall/defs_linux_{amd64,arm64}.go` | `SYS_IOCTL` constant. |
 | `src/runtime/sys_linux_{amd64,arm64}.s` | `ftruncate` system-call stub. |
 | `src/runtime/memfile_test.go` | Tests (see §8). |
 | `src/runtime/export_memfile_test.go` | Exports internals to the external test package. |
@@ -287,9 +297,6 @@ bin/go test ./src/runtime -run 'TestLargeNoscan|TestSmallNoscan|TestTinyNoscan|T
 
 * **Architectures.** Only `linux/amd64` and `linux/arm64`. Other platforms use
   the stub (feature disabled).
-* **Regular files only (today).** `ftruncate` is required to succeed, so a raw
-  block device currently fails setup. Backing `/dev/zramN` requires adding a
-  `BLKGETSIZE64`-based size path and skipping `ftruncate` for devices.
 * **Fully resident.** Region pages are never scavenged. For zram this is usually
   fine (zram compresses transparently); for disk files, an optional mode that
   `MADV_DONTNEED`s cold region pages could be added.
@@ -307,26 +314,23 @@ bin/go test ./src/runtime -run 'TestLargeNoscan|TestSmallNoscan|TestTinyNoscan|T
 
 A tracked list of useful follow-ups for the feature (not yet implemented):
 
-1. **Block-device (zram) backing.** Detect the device size via `BLKGETSIZE64`
-   and skip `ftruncate`, so `/dev/zramN` works directly instead of requiring a
-   regular file.
-2. **Selective annotation.** A `//go:noscanfile` pragma and/or an arena-style
+1. **Selective annotation.** A `//go:noscanfile` pragma and/or an arena-style
    API (`FileArena`) to route only specific functions'/objects' noscan to the
    region. This cuts writeback churn for disk-backed deployments (where routing
    *all* noscan may be too aggressive) and gives explicit lifetime control.
-3. **Growable region.** Allow the region to extend (map additional file-backed
+2. **Growable region.** Allow the region to extend (map additional file-backed
    chunks) on exhaustion instead of always falling back to the regular heap.
-4. **Scavenging policy.** An optional mode that `MADV_DONTNEED`s cold region
+3. **Scavenging policy.** An optional mode that `MADV_DONTNEED`s cold region
    pages (mainly useful for disk-backed regions) to reclaim clean file pages.
-5. **Accurate global stats.** Add the region mapping to
+4. **Accurate global stats.** Add the region mapping to
    `gcController.mappedReady`, and expose region usage (bytes in use, exhaustion
    count) via `runtime.ReadMemStats` or a `GODEBUG` readout.
-6. **More architectures.** Extend beyond `linux/amd64` and `linux/arm64`
+5. **More architectures.** Extend beyond `linux/amd64` and `linux/arm64`
    (e.g. `riscv64`, `loong64`, `ppc64le`). Note the 32-bit `off_t` complication
    for `ftruncate` on `linux/386` and `linux/arm`.
-7. **Huge-page hint.** Apply `MADV_HUGEPAGE` to the region mapping where it
+6. **Huge-page hint.** Apply `MADV_HUGEPAGE` to the region mapping where it
    would reduce TLB pressure.
-8. **File reclamation.** Hole-punch (`fallocate` with
+7. **File reclamation.** Hole-punch (`fallocate` with
    `FALLOC_FL_PUNCH_HOLE`) or shrink the backing file as region spans free,
    instead of holding a fixed-size file for the process lifetime.
 
