@@ -13,6 +13,7 @@ package runtime
 import (
 	"internal/goarch"
 	"internal/runtime/atomic"
+	"internal/runtime/syscall"
 	"unsafe"
 )
 
@@ -21,6 +22,23 @@ import (
 //
 //go:nosplit
 func ftruncate(fd int32, length int64) int32
+
+// blkGetSize64 is the Linux BLKGETSIZE64 ioctl, which writes a block device's
+// size in bytes into a uint64. It has the same encoding on all 64-bit Linux
+// architectures (_IOR(0x12, 114, 8)).
+const blkGetSize64 = 0x80081272
+
+// ioctl calls the ioctl system call. It returns 0 on success or a negative
+// errno on failure.
+//
+//go:nosplit
+func ioctl(fd int32, req uint32, arg unsafe.Pointer) int32 {
+	r, _, e := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), uintptr(req), uintptr(arg), 0, 0, 0)
+	if e != 0 {
+		return int32(-e)
+	}
+	return int32(r)
+}
 
 // noscanFileRegion describes a contiguous, file-backed address-space region
 // used to back large noscan spans. The region is reserved as anonymous
@@ -125,12 +143,22 @@ func (r *noscanFileRegion) setup(path string, size uintptr) string {
 		return "noscan file region: unable to open backing file"
 	}
 
-	// Size the file. (For block devices this may fail; for now we require a
-	// regular file, which ftruncate succeeds on.)
+	// Size the backing store. For a regular file, ftruncate extends it to the
+	// requested size. ftruncate fails on a block device (EINVAL); in that case
+	// query the device size with BLKGETSIZE64 and use the device directly
+	// (without truncation) provided it is at least as large as the region.
 	if rc := ftruncate(fd, int64(size)); rc != 0 {
-		closefd(fd)
-		sysFree(base, size, &memstats.other_sys)
-		return "noscan file region: ftruncate failed"
+		var devSize uint64
+		if rc := ioctl(fd, blkGetSize64, unsafe.Pointer(&devSize)); rc != 0 {
+			closefd(fd)
+			sysFree(base, size, &memstats.other_sys)
+			return "noscan file region: ftruncate failed and not a block device"
+		}
+		if uintptr(devSize) < size {
+			closefd(fd)
+			sysFree(base, size, &memstats.other_sys)
+			return "noscan file region: block device smaller than requested size"
+		}
 	}
 
 	// Overlay a MAP_SHARED file mapping on the reservation, replacing the
